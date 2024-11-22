@@ -1,0 +1,26 @@
+[[source]]
+url = "https://pypi.org/simple"
+verify_ssl = true
+name = "pypi"
+
+[packages]
+boto3 = "*"
+duckdb = "*"
+pandas = "*"
+pyarrow = "*"
+
+[dev-packages]
+black = "*"
+boto3-stubs = {version = "*", extras = ["s3"]}
+coveralls = "*"
+ipython = "*"
+mypy = "*"
+pre-commit = "*"
+pyarrow-stubs = "*"
+pytest = "*"
+ruff = "*"
+setuptools = "*"
+pandas-stubs = "*"
+
+[requires]
+python_version = "3.12"
