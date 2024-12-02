@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "timdex_dataset_api"
-version = "0.1.0"
+dynamic = ["version"]
 description = "Python library for interacting with a TIMDEX parquet dataset"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -116,3 +116,6 @@ max-doc-length = 90
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.setuptools.dynamic]
+version = {attr = "timdex_dataset_api.__version__"}
