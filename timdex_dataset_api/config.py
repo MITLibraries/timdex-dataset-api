@@ -17,6 +17,7 @@ def configure_logger(name: str) -> logging.Logger:
     log_level = os.getenv("TDA_LOG_LEVEL", "INFO").strip().upper()
     if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
         raise ValueError(f"Invalid log level: '{log_level}'")
+    logger.setLevel(getattr(logging, log_level))
 
     handler = logging.StreamHandler()
     handler.setFormatter(
@@ -26,6 +27,5 @@ def configure_logger(name: str) -> logging.Logger:
         )
     )
     logger.addHandler(handler)
-    logger.setLevel(getattr(logging, log_level))
 
     return logger
