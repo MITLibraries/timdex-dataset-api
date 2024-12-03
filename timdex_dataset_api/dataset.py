@@ -58,34 +58,49 @@ class TIMDEXDataset:
             session_token=credentials.token,
         )
 
-    @staticmethod
+    @classmethod
     def parse_location(
+        cls,
         location: str | list[str],
     ) -> tuple[fs.FileSystem, str | list[str]]:
         """Parse and return the filesystem and normalized source location(s).
 
         Handles both single location strings and lists of Parquet file paths.
         """
-        source: str | list[str]
-        if isinstance(location, str):
-            if location.startswith("s3://"):
-                filesystem = TIMDEXDataset.get_s3_filesystem()
-                source = location.removeprefix("s3://")
-            else:
-                filesystem = fs.LocalFileSystem()
-                source = location
-        elif isinstance(location, list):
-            if all(loc.startswith("s3://") for loc in location):
-                filesystem = TIMDEXDataset.get_s3_filesystem()
-                source = [loc.removeprefix("s3://") for loc in location]
-            elif all(not loc.startswith("s3://") for loc in location):
-                filesystem = fs.LocalFileSystem()
-                source = location
-            else:
-                raise ValueError("Mixed S3 and local paths are not supported.")
-        else:
-            raise TypeError("Location type must be str or list[str].")
+        match location:
+            case str():
+                return cls._parse_single_location(location)
+            case list():
+                return cls._parse_multiple_locations(location)
+            case _:
+                raise TypeError("Location type must be str or list[str].")
 
+    @classmethod
+    def _parse_single_location(
+        cls, location: str
+    ) -> tuple[fs.FileSystem, str | list[str]]:
+        """Get filesystem and normalized location for single location."""
+        if location.startswith("s3://"):
+            filesystem = TIMDEXDataset.get_s3_filesystem()
+            source = location.removeprefix("s3://")
+        else:
+            filesystem = fs.LocalFileSystem()
+            source = location
+        return filesystem, source
+
+    @classmethod
+    def _parse_multiple_locations(
+        cls, location: list[str]
+    ) -> tuple[fs.FileSystem, str | list[str]]:
+        """Get filesystem and normalized location for multiple locations."""
+        if all(loc.startswith("s3://") for loc in location):
+            filesystem = TIMDEXDataset.get_s3_filesystem()
+            source = [loc.removeprefix("s3://") for loc in location]
+        elif all(not loc.startswith("s3://") for loc in location):
+            filesystem = fs.LocalFileSystem()
+            source = location
+        else:
+            raise ValueError("Mixed S3 and local paths are not supported.")
         return filesystem, source
 
     def load_dataset(self) -> ds.Dataset:
