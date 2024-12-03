@@ -26,6 +26,15 @@ timdex_dataset_api = {git = "https://github.com/MITLibraries/timdex-dataset-api.
 ... other dependencies...
 ```
 
+## Environment Variables
+
+### Required
+
+### Optional
+```shell
+TDA_LOG_LEVEL=# log level for timdex-dataset-api, accepts [DEBUG, INFO, WARNING, ERROR], default INFO
+```
+
 ## Usage
 
 _TODO..._

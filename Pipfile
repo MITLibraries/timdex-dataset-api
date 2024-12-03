@@ -21,6 +21,8 @@ pytest = "*"
 ruff = "*"
 setuptools = "*"
 pandas-stubs = "*"
+moto = "*"
+pytest-mock = "*"
 
 [requires]
 python_version = "3.12"
