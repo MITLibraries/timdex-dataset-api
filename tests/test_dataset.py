@@ -2,6 +2,7 @@
 
 from unittest.mock import MagicMock, patch
 
+import pyarrow as pa
 import pytest
 from pyarrow import fs
 
@@ -44,25 +45,17 @@ def test_parse_location_single_local_directory(
     assert source == expected_source
 
 
-@patch("timdex_dataset_api.dataset.fs.S3FileSystem")
-@patch("timdex_dataset_api.dataset.boto3.session.Session")
-def test_get_s3_filesystem_success(mock_session, mock_s3_filesystem):
-    mock_credentials = MagicMock()
-    mock_credentials.secret_key = "fake_secret_key"
-    mock_credentials.access_key = "fake_access_key"
-    mock_credentials.token = "fake_session_token"
-    mock_session.return_value.get_credentials.return_value = mock_credentials
-    mock_session.return_value.region_name = "us-east-1"
-
+def test_get_s3_filesystem_success(mocker):
+    mocked_s3_filesystem = mocker.spy(fs, "S3FileSystem")
     s3_filesystem = TIMDEXDataset.get_s3_filesystem()
 
-    mock_s3_filesystem.assert_called_once_with(
-        secret_key="fake_secret_key",
-        access_key="fake_access_key",
-        region="us-east-1",
-        session_token="fake_session_token",
-    )
-    assert isinstance(s3_filesystem, MagicMock)
+    assert mocked_s3_filesystem.call_args[1] == {
+        "secret_key": "fake_secret_key",
+        "access_key": "fake_access_key",
+        "region": "us-east-1",
+        "session_token": "fake_session_token",
+    }
+    assert isinstance(s3_filesystem, pa._s3fs.S3FileSystem)
 
 
 @patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
