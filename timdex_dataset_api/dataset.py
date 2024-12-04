@@ -50,6 +50,7 @@ class TIMDEXDataset:
 
     def __init__(self, location: str | list[str]):
         self.location = location
+        self.filesystem, self.source = self.parse_location(self.location)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
@@ -132,13 +133,12 @@ class TIMDEXDataset:
         raised when reading or writing data.
         """
         start_time = time.perf_counter()
-        filesystem, source = self.parse_location(self.location)
         dataset = ds.dataset(
-            source,
+            self.source,
             schema=self.schema,
             format="parquet",
             partitioning="hive",
-            filesystem=filesystem,
+            filesystem=self.filesystem,
         )
         logger.info(
             f"Dataset successfully loaded: '{self.location}', "
@@ -189,7 +189,7 @@ class TIMDEXDataset:
         """
         start_time = time.perf_counter()
 
-        if isinstance(self.location, list):
+        if isinstance(self.source, list):
             raise TypeError(
                 "Dataset location must be the root of a single dataset for writing"
             )
@@ -203,9 +203,10 @@ class TIMDEXDataset:
         written_files = []
         ds.write_dataset(
             record_batches_iter,
-            base_dir=self.location,
+            base_dir=self.source,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
             existing_data_behavior="delete_matching",
+            filesystem=self.filesystem,
             file_visitor=lambda written_file: written_files.append(written_file),
             format="parquet",
             max_rows_per_file=MAX_ROWS_PER_FILE,
