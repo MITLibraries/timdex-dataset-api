@@ -1,5 +1,4 @@
 # ruff: noqa: S105, S106, SLF001
-
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -33,7 +32,7 @@ from timdex_dataset_api.dataset import DatasetNotLoadedError, TIMDEXDataset
     ],
 )
 @patch("timdex_dataset_api.dataset.TIMDEXDataset.get_s3_filesystem")
-def test_parse_location_single_local_directory(
+def test_parse_location_success_scenarios(
     get_s3_filesystem,
     location,
     expected_filesystem,
@@ -43,6 +42,28 @@ def test_parse_location_single_local_directory(
     filesystem, source = TIMDEXDataset.parse_location(location)
     assert isinstance(filesystem, expected_filesystem)
     assert source == expected_source
+
+
+@pytest.mark.parametrize(
+    ("location", "expected_exception"),
+    [
+        # None is invalid location type
+        (None, TypeError),
+        # mixed local and S3 locations
+        (
+            [
+                "/local/path/to/dataset/records.parquet",
+                "s3://path/to/dataset/records.parquet",
+            ],
+            ValueError,
+        ),
+    ],
+)
+@patch("timdex_dataset_api.dataset.TIMDEXDataset.get_s3_filesystem")
+def test_parse_location_error_scenarios(get_s3_filesystem, location, expected_exception):
+    get_s3_filesystem.return_value = fs.S3FileSystem()
+    with pytest.raises(expected_exception):
+        _ = TIMDEXDataset.parse_location(location)
 
 
 def test_get_s3_filesystem_success(mocker):
