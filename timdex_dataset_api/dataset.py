@@ -209,6 +209,7 @@ class TIMDEXDataset:
             filesystem=self.filesystem,
             file_visitor=lambda written_file: written_files.append(written_file),
             format="parquet",
+            max_open_files=500,  # avoids S3 503 "SLOW_DOWN" error for PutObject requests
             max_rows_per_file=MAX_ROWS_PER_FILE,
             max_rows_per_group=MAX_ROWS_PER_GROUP,
             partitioning=self.partition_columns,
