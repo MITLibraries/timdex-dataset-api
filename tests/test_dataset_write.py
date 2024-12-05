@@ -175,3 +175,54 @@ def test_dataset_write_schema_applied_to_dataset(new_dataset, sample_records_ite
     )
 
     assert set(dataset.schema.names) == set(TIMDEX_DATASET_SCHEMA.names)
+
+
+def test_dataset_write_partition_deleted_when_written_to_again(
+    new_dataset, sample_records_iter
+):
+    """This tests the existing_data_behavior="delete_matching" configuration when writing
+    to a dataset."""
+    partition_values = {
+        "source": "alma",
+        "run_date": "2024-12-01",
+        "run_type": "daily",
+        "action": "index",
+        "run_id": "000-111-aaa-bbb",
+    }
+
+    # perform FIRST write to run_date="2024-12-01"
+    written_files_1 = new_dataset.write(
+        sample_records_iter(10),
+        partition_values=partition_values,
+    )
+
+    # assert that files from first write are present at this time
+    assert os.path.exists(written_files_1[0].path)
+
+    # perform unrelated write with new run_date to confirm this is untouched during delete
+    new_partition_values = partition_values.copy()
+    new_partition_values["run_date"] = "2024-12-15"
+    new_partition_values["run_id"] = "222-333-ccc-ddd"
+    written_files_x = new_dataset.write(
+        sample_records_iter(7),
+        partition_values=new_partition_values,
+    )
+
+    # perform SECOND write to run_date="2024-12-01", expecting this to delete everything
+    # under this combination of partitions (i.e. the first write)
+    written_files_2 = new_dataset.write(
+        sample_records_iter(10),
+        partition_values=partition_values,
+    )
+
+    new_dataset.reload()
+
+    # assert 17 rows: second write for run_date="2024-12-01" @ 10 rows +
+    # run_date="2024-12-15" @ 5 rows
+    assert new_dataset.row_count == 17
+
+    # assert that files from first run_date="2024-12-01" are gone, second exist
+    # and files from run_date="2024-12-15" also exist
+    assert not os.path.exists(written_files_1[0].path)
+    assert os.path.exists(written_files_2[0].path)
+    assert os.path.exists(written_files_x[0].path)
