@@ -24,8 +24,8 @@ class DatasetRecord:
     source: str | None = None
     run_date: str | datetime.datetime | None = None
     run_type: str | None = None
-    action: str | None = None
     run_id: str | None = None
+    action: str | None = None
 
     def to_dict(
         self,
@@ -46,7 +46,7 @@ class DatasetRecord:
         # ensure all partition columns are set
         missing_partition_values = [
             field
-            for field in ["source", "run_date", "run_type", "action", "run_id"]
+            for field in ["source", "run_date", "run_type", "run_id", "action"]
             if getattr(self, field) is None
         ]
         if missing_partition_values:

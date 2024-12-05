@@ -169,14 +169,14 @@ def test_dataset_write_schema_partitions_correctly_ordered(
             "source": "alma",
             "run_date": "2024-12-01",
             "run_type": "daily",
-            "action": "index",
             "run_id": "000-111-aaa-bbb",
+            "action": "index",
         },
     )
     file = written_files[0]
     assert (
         "/source=alma/run_date=2024-12-01/run_type=daily"
-        "/action=index/run_id=000-111-aaa-bbb" in file.path
+        "/run_id=000-111-aaa-bbb/action=index/" in file.path
     )
 
 

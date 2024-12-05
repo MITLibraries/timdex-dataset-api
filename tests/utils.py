@@ -43,18 +43,17 @@ def generate_sample_records_with_simulated_partitions(
     run_dates = ["2024-01-01", "2024-06-15", "2024-12-31"]
     run_types = ["full", "daily"]
     actions = ["index", "delete"]
-    run_ids = [str(uuid.uuid4()) for x in range(num_run_ids)]
 
     records_remaining = num_records
     while records_remaining > 0:
         batch_size = random.randint(1, min(100, records_remaining))
+        source = random.choice(sources)
         yield from generate_sample_records(
             num_records=batch_size,
-            timdex_record_id_prefix=random.choice(sources),
-            source=random.choice(sources),
+            timdex_record_id_prefix=source,
+            source=source,
             run_date=random.choice(run_dates),
             run_type=random.choice(run_types),
             action=random.choice(actions),
-            run_id=random.choice(run_ids),
         )
         records_remaining -= batch_size
