@@ -180,6 +180,15 @@ class TIMDEXDataset:
         optimizations (e.g. batching) so that the calling context can focus on yielding
         data.
 
+        For write, the configuration existing_data_behavior="delete_matching" is used.
+        This means that during write, if any pre-existing files are found for the exact
+        combinations of partitions for that batch, those pre-existing files will be
+        deleted.  This effectively makes a write idempotent to the TIMDEX dataset.
+
+        A max_open_files=500 configuration is set to avoid AWS S3 503 error "SLOW_DOWN"
+        if too many PutObject calls are made in parallel.  Testing suggests this does not
+        substantially slow down the overall write.
+
         Args:
             - records_iter: Iterator of DatasetRecord instances
             - partition_values: dictionary of static partition column name/value pairs
@@ -209,7 +218,7 @@ class TIMDEXDataset:
             filesystem=self.filesystem,
             file_visitor=lambda written_file: written_files.append(written_file),
             format="parquet",
-            max_open_files=500,  # avoids S3 503 "SLOW_DOWN" error for PutObject requests
+            max_open_files=500,
             max_rows_per_file=MAX_ROWS_PER_FILE,
             max_rows_per_group=MAX_ROWS_PER_GROUP,
             partitioning=self.partition_columns,
@@ -235,7 +244,7 @@ class TIMDEXDataset:
         are the same for all rows written, eliminating the need to repeat those values
         in the iterator).
 
-        Each DatasetRecord is serialized to a dictionary before added to a
+        Each DatasetRecord is validated and serialized to a dictionary before added to a
         pyarrow.RecordBatch for writing.
 
         Args:

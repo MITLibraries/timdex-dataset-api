@@ -3,6 +3,8 @@
 import datetime
 from dataclasses import asdict, dataclass
 
+from timdex_dataset_api.exceptions import InvalidDatasetRecordError
+
 
 @dataclass
 class DatasetRecord:
@@ -27,10 +29,27 @@ class DatasetRecord:
 
     def to_dict(
         self,
+        *,
         partition_values: dict[str, str | datetime.datetime] | None = None,
+        validate: bool = True,
     ) -> dict:
         """Serialize instance as dictionary, setting partition values if passed."""
         if partition_values:
             for key, value in partition_values.items():
                 setattr(self, key, value)
+        if validate:
+            self.validate()
         return asdict(self)
+
+    def validate(self) -> None:
+        """Validate DatasetRecord for writing."""
+        # ensure all partition columns are set
+        missing_partition_values = [
+            field
+            for field in ["source", "run_date", "run_type", "action", "run_id"]
+            if getattr(self, field) is None
+        ]
+        if missing_partition_values:
+            raise InvalidDatasetRecordError(
+                f"Partition values are missing: {', '.join(missing_partition_values)}"
+            )

@@ -13,25 +13,23 @@ from timdex_dataset_api.dataset import (
     DatasetNotLoadedError,
     TIMDEXDataset,
 )
+from timdex_dataset_api.exceptions import InvalidDatasetRecordError
 from timdex_dataset_api.record import DatasetRecord
 
 
 def test_dataset_record_serialization():
-    dataset_record = DatasetRecord(
-        timdex_record_id="alma:123",
-        source_record=b"<record><title>Hello World.</title></record>",
-        transformed_record=b"""{"title":["Hello World."]}""",
-    )
-    assert dataset_record.to_dict() == {
+    values = {
         "timdex_record_id": "alma:123",
         "source_record": b"<record><title>Hello World.</title></record>",
         "transformed_record": b"""{"title":["Hello World."]}""",
-        "source": None,
-        "run_date": None,
-        "run_type": None,
-        "action": None,
-        "run_id": None,
+        "source": "libguides",
+        "run_date": "2024-12-01",
+        "run_type": "full",
+        "action": "index",
+        "run_id": "abc123",
     }
+    dataset_record = DatasetRecord(**values)
+    assert dataset_record.to_dict() == values
 
 
 def test_dataset_record_serialization_with_partition_values_provided():
@@ -57,6 +55,25 @@ def test_dataset_record_serialization_with_partition_values_provided():
         "action": "index",
         "run_id": "000-111-aaa-bbb",
     }
+
+
+def test_dataset_record_serialization_missing_partition_raise_error():
+    values = {
+        "timdex_record_id": "alma:123",
+        "source_record": b"<record><title>Hello World.</title></record>",
+        "transformed_record": b"""{"title":["Hello World."]}""",
+        "source": "libguides",
+        "run_date": "2024-12-01",
+        "run_type": "full",
+        "action": "index",
+        "run_id": None,  # <------ missing partition here
+    }
+    dataset_record = DatasetRecord(**values)
+    with pytest.raises(
+        InvalidDatasetRecordError,
+        match="Partition values are missing: run_id",
+    ):
+        assert dataset_record.to_dict() == values
 
 
 def test_dataset_write_records_to_new_dataset(new_dataset, sample_records_iter):
@@ -226,3 +243,18 @@ def test_dataset_write_partition_deleted_when_written_to_again(
     assert not os.path.exists(written_files_1[0].path)
     assert os.path.exists(written_files_2[0].path)
     assert os.path.exists(written_files_x[0].path)
+
+
+def test_dataset_write_missing_partitions_raise_error(new_dataset, sample_records_iter):
+    missing_partition_values = {
+        "source": "libguides",
+        "run_date": None,
+        "run_type": None,
+        "action": None,
+        "run_id": None,
+    }
+    with pytest.raises(InvalidDatasetRecordError, match="Partition values are missing"):
+        _ = new_dataset.write(
+            sample_records_iter(10),
+            partition_values=missing_partition_values,
+        )
