@@ -28,8 +28,8 @@ TIMDEX_DATASET_SCHEMA = pa.schema(
         pa.field("source", pa.string()),
         pa.field("run_date", pa.date32()),
         pa.field("run_type", pa.string()),
-        pa.field("action", pa.string()),
         pa.field("run_id", pa.string()),
+        pa.field("action", pa.string()),
     )
 )
 
@@ -37,8 +37,8 @@ TIMDEX_DATASET_PARTITION_COLUMNS = [
     "source",
     "run_date",
     "run_type",
-    "action",
     "run_id",
+    "action",
 ]
 
 DEFAULT_BATCH_SIZE = 1_000
