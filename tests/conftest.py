@@ -1,7 +1,11 @@
 """tests/conftest.py"""
 
+# ruff: noqa: D205, D209
+
+
 import pytest
 
+from tests.utils import generate_sample_records
 from timdex_dataset_api import TIMDEXDataset
 
 
@@ -22,3 +26,37 @@ def local_dataset_location():
 @pytest.fixture
 def local_dataset(local_dataset_location):
     return TIMDEXDataset.load(local_dataset_location)
+
+
+@pytest.fixture
+def new_dataset(tmp_path) -> TIMDEXDataset:
+    location = str(tmp_path / "new_dataset")
+    return TIMDEXDataset(location=location)
+
+
+@pytest.fixture
+def sample_records_iter():
+    """Simulates an iterator of X number of valid DatasetRecord instances."""
+
+    def _records_iter(num_records):
+        return generate_sample_records(num_records)
+
+    return _records_iter
+
+
+@pytest.fixture
+def sample_records_iter_without_partitions():
+    """Simulates an iterator of X number of DatasetRecord instances WITHOUT partition
+    values included."""
+
+    def _records_iter(num_records):
+        return generate_sample_records(
+            num_records,
+            source=None,
+            run_date=None,
+            run_type=None,
+            action=None,
+            run_id=None,
+        )
+
+    return _records_iter
