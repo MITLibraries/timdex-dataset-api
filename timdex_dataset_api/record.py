@@ -19,35 +19,51 @@ class DatasetRecord:
     timdex_record_id: str
     source_record: bytes
     transformed_record: bytes
+    source: str
+    run_date: str | datetime.datetime
+    run_type: str
+    run_id: str
+    action: str
 
     # partition columns
-    source: str | None = None
-    run_date: str | datetime.datetime | None = None
-    run_type: str | None = None
-    run_id: str | None = None
-    action: str | None = None
+    year: str | None = None
+    month: str | None = None
+    day: str | None = None
+
+    def __post_init__(self) -> None:
+        """Post init method to derive partition values from self.run_date"""
+        run_date = self.run_date
+
+        if isinstance(run_date, str):
+            try:
+                run_date = datetime.datetime.strptime(run_date, "%Y-%m-%d").astimezone(
+                    datetime.UTC
+                )
+            except ValueError as exception:
+                raise InvalidDatasetRecordError(
+                    "Cannot parse partition values [year, month, date] from invalid 'run-date' string."  # noqa: E501
+                ) from exception
+
+        self.year = run_date.strftime("%Y")
+        self.month = run_date.strftime("%m")
+        self.day = run_date.strftime("%d")
 
     def to_dict(
         self,
         *,
-        partition_values: dict[str, str | datetime.datetime] | None = None,
         validate: bool = True,
     ) -> dict:
-        """Serialize instance as dictionary, setting partition values if passed."""
-        if partition_values:
-            for key, value in partition_values.items():
-                setattr(self, key, value)
+        """Serialize instance as dictionary."""
         if validate:
             self.validate()
+
         return asdict(self)
 
     def validate(self) -> None:
         """Validate DatasetRecord for writing."""
         # ensure all partition columns are set
         missing_partition_values = [
-            field
-            for field in ["source", "run_date", "run_type", "run_id", "action"]
-            if getattr(self, field) is None
+            field for field in ["year", "month", "day"] if getattr(self, field) is None
         ]
         if missing_partition_values:
             raise InvalidDatasetRecordError(
