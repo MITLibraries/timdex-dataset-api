@@ -1,6 +1,5 @@
 """timdex_dataset_api/dataset.py"""
 
-import datetime
 import itertools
 import time
 import uuid
@@ -30,15 +29,16 @@ TIMDEX_DATASET_SCHEMA = pa.schema(
         pa.field("run_type", pa.string()),
         pa.field("run_id", pa.string()),
         pa.field("action", pa.string()),
+        pa.field("year", pa.string()),
+        pa.field("month", pa.string()),
+        pa.field("day", pa.string()),
     )
 )
 
 TIMDEX_DATASET_PARTITION_COLUMNS = [
-    "source",
-    "run_date",
-    "run_type",
-    "run_id",
-    "action",
+    "year",
+    "month",
+    "day",
 ]
 
 DEFAULT_BATCH_SIZE = 1_000
@@ -166,25 +166,22 @@ class TIMDEXDataset:
         self,
         records_iter: Iterator["DatasetRecord"],
         *,
-        partition_values: dict[str, str | datetime.datetime] | None = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
         use_threads: bool = True,
     ) -> list[ds.WrittenFile]:
         """Write records to the TIMDEX parquet dataset.
 
-        This method expects an iterator of DatasetRecord instances, with optional
-        partition column values that will be applied to all rows written (often, these
-        are the same for all rows written, eliminating the need to repeat those values
-        in the iterator).
+        This method expects an iterator of DatasetRecord instances.
 
         This method encapsulates all dataset writing mechanics and performance
         optimizations (e.g. batching) so that the calling context can focus on yielding
         data.
 
-        For write, the configuration existing_data_behavior="delete_matching" is used.
-        This means that during write, if any pre-existing files are found for the exact
-        combinations of partitions for that batch, those pre-existing files will be
-        deleted.  This effectively makes a write idempotent to the TIMDEX dataset.
+        This method uses the configuration existing_data_behavior="overwrite_or_ignore",
+        which will ignore any existing data and will overwrite files with the same name
+        as the parquet file. Since a UUID is generated for each write via the
+        basename_template, this effectively makes a write idempotent to the
+        TIMDEX dataset.
 
         A max_open_files=500 configuration is set to avoid AWS S3 503 error "SLOW_DOWN"
         if too many PutObject calls are made in parallel.  Testing suggests this does not
@@ -192,7 +189,6 @@ class TIMDEXDataset:
 
         Args:
             - records_iter: Iterator of DatasetRecord instances
-            - partition_values: dictionary of static partition column name/value pairs
             - batch_size: size for batches to yield and write, directly affecting row
                 group size in final parquet files
             - use_threads: boolean if threads should be used for writing
@@ -207,7 +203,6 @@ class TIMDEXDataset:
 
         record_batches_iter = self.get_dataset_record_batches(
             records_iter,
-            partition_values=partition_values,
             batch_size=batch_size,
         )
 
@@ -215,7 +210,7 @@ class TIMDEXDataset:
             record_batches_iter,
             base_dir=self.source,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
-            existing_data_behavior="delete_matching",
+            existing_data_behavior="overwrite_or_ignore",
             filesystem=self.filesystem,
             file_visitor=lambda written_file: self._written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
@@ -235,32 +230,24 @@ class TIMDEXDataset:
         self,
         records_iter: Iterator["DatasetRecord"],
         *,
-        partition_values: dict[str, str | datetime.datetime] | None = None,
         batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> Iterator[pa.RecordBatch]:
         """Yield pyarrow.RecordBatches for writing.
 
-        This method expects an iterator of DatasetRecord instances, with optional
-        partition column values that will be applied to all rows written (often, these
-        are the same for all rows written, eliminating the need to repeat those values
-        in the iterator).
+        This method expects an iterator of DatasetRecord instances.
 
         Each DatasetRecord is validated and serialized to a dictionary before added to a
         pyarrow.RecordBatch for writing.
 
         Args:
             - records_iter: Iterator of DatasetRecord instances
-            - partition_values: dictionary of static partition column name/value pairs
             - batch_size: size for batches to yield and write, directly affecting row
                 group size in final parquet files
         """
         for i, record_batch in enumerate(itertools.batched(records_iter, batch_size)):
             batch_start_time = time.perf_counter()
             batch = pa.RecordBatch.from_pylist(
-                [
-                    record.to_dict(partition_values=partition_values)
-                    for record in record_batch
-                ]
+                [record.to_dict() for record in record_batch]
             )
             logger.debug(
                 f"Batch {i + 1} yielded for writing, "

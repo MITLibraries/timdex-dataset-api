@@ -51,12 +51,7 @@ def sample_records_iter_without_partitions():
 
     def _records_iter(num_records):
         return generate_sample_records(
-            num_records,
-            source=None,
-            run_date=None,
-            run_type=None,
-            action=None,
-            run_id=None,
+            num_records, run_date="invalid run-date", year=None, month=None, day=None
         )
 
     return _records_iter
