@@ -1,8 +1,8 @@
 # ruff: noqa: S105, S106, SLF001, PLR2004, PD901, D209, D205
-
 import math
 import os
 import re
+from datetime import UTC, datetime
 from unittest.mock import patch
 
 import pyarrow.dataset as ds
@@ -15,7 +15,6 @@ from timdex_dataset_api.dataset import (
     DatasetNotLoadedError,
     TIMDEXDataset,
 )
-from timdex_dataset_api.exceptions import InvalidDatasetRecordError
 from timdex_dataset_api.record import DatasetRecord
 
 
@@ -29,11 +28,14 @@ def test_dataset_record_init():
         "run_type": "full",
         "action": "index",
         "run_id": "000-111-aaa-bbb",
-        "year": 2024,
-        "month": 12,
-        "day": 1,
     }
-    assert DatasetRecord(**values)
+    record = DatasetRecord(**values)
+    assert record
+    assert (record.year, record.month, record.day) == (
+        "2024",
+        "12",
+        "01",
+    )
 
 
 def test_dataset_record_init_with_invalid_run_date_raise_error():
@@ -46,15 +48,9 @@ def test_dataset_record_init_with_invalid_run_date_raise_error():
         "run_type": "full",
         "action": "index",
         "run_id": "000-111-aaa-bbb",
-        "year": None,
-        "month": None,
-        "day": None,
     }
     with pytest.raises(
-        InvalidDatasetRecordError,
-        match=re.escape(
-            "Cannot parse partition values [year, month, date] from invalid 'run-date' string."  # noqa: E501
-        ),
+        ValueError, match=re.escape("time data '-12-01' does not match format '%Y-%m-%d'")
     ):
         DatasetRecord(**values)
 
@@ -69,12 +65,21 @@ def test_dataset_record_serialization():
         "run_type": "full",
         "action": "index",
         "run_id": "abc123",
+    }
+    dataset_record = DatasetRecord(**values)
+    assert dataset_record.to_dict() == {
+        "timdex_record_id": "alma:123",
+        "source_record": b"<record><title>Hello World.</title></record>",
+        "transformed_record": b"""{"title":["Hello World."]}""",
+        "source": "libguides",
+        "run_date": datetime(2024, 12, 1).astimezone(UTC),
+        "run_type": "full",
+        "action": "index",
+        "run_id": "abc123",
         "year": "2024",
         "month": "12",
         "day": "01",
     }
-    dataset_record = DatasetRecord(**values)
-    assert dataset_record.to_dict() == values
 
 
 def test_dataset_write_records_to_new_dataset(new_dataset, sample_records_iter):
