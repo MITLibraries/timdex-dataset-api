@@ -3,6 +3,7 @@
 import math
 import os
 import re
+from unittest.mock import patch
 
 import pyarrow.dataset as ds
 import pytest
@@ -148,34 +149,63 @@ def test_dataset_write_schema_applied_to_dataset(new_dataset, sample_records_ite
     assert set(dataset.schema.names) == set(TIMDEX_DATASET_SCHEMA.names)
 
 
-def test_dataset_write_partition_deleted_when_written_to_again(
-    new_dataset, sample_records_iter
-):
-    """This tests the existing_data_behavior="delete_matching" configuration when writing
-    to a dataset."""
-    # perform FIRST write to run_date="2024-12-01"
-    written_files_1 = new_dataset.write(sample_records_iter(10))
+def test_dataset_write_partition_for_single_source(new_dataset, sample_records_iter):
+    written_files = new_dataset.write(sample_records_iter(10))
+    assert len(written_files) == 1
+    assert os.path.exists(new_dataset.location)
+    assert "year=2024/month=12/day=01" in written_files[0].path
 
-    # assert that files from first write are present at this time
-    assert os.path.exists(written_files_1[0].path)
 
-    # perform unrelated write with new run_date to confirm this is untouched during delete
-    written_files_x = new_dataset.write(
-        generate_sample_records(7, run_date="2024-12-15"),
-    )
-
-    # perform SECOND write to run_date="2024-12-01", expecting this to delete everything
-    # under this combination of partitions (i.e. the first write)
-    written_files_2 = new_dataset.write(sample_records_iter(10))
-
+def test_dataset_write_partition_for_multiple_sources(new_dataset, sample_records_iter):
+    # perform write for source="alma" and run_date="2024-12-01"
+    written_files_source_a = new_dataset.write(sample_records_iter(10))
     new_dataset.reload()
 
-    # assert 17 rows: second write for run_date="2024-12-01" @ 10 rows +
-    # run_date="2024-12-15" @ 5 rows
+    assert os.path.exists(written_files_source_a[0].path)
+    assert new_dataset.row_count == 10
+
+    # perform write for source="libguides" and run_date="2024-12-01"
+    written_files_source_b = new_dataset.write(
+        generate_sample_records(
+            num_records=7, timdex_record_id_prefix="libguides", source="libguides"
+        )
+    )
+    new_dataset.reload()
+
+    assert os.path.exists(written_files_source_b[0].path)
+    assert os.path.exists(written_files_source_a[0].path)
     assert new_dataset.row_count == 17
 
-    # assert that files from first run_date="2024-12-01" are gone, second exist
-    # and files from run_date="2024-12-15" also exist
-    assert not os.path.exists(written_files_1[0].path)
-    assert os.path.exists(written_files_2[0].path)
-    assert os.path.exists(written_files_x[0].path)
+
+def test_dataset_write_partition_ignore_existing_data(new_dataset, sample_records_iter):
+    # perform two (2) writes for source="alma" and run_date="2024-12-01"
+    written_files_source_a0 = new_dataset.write(sample_records_iter(10))
+    written_files_source_a1 = new_dataset.write(sample_records_iter(10))
+    new_dataset.reload()
+
+    # assert that both files exist and no overwriting occurs
+    assert os.path.exists(written_files_source_a0[0].path)
+    assert os.path.exists(written_files_source_a1[0].path)
+    assert new_dataset.row_count == 20
+
+
+@patch("timdex_dataset_api.dataset.uuid.uuid4")
+def test_dataset_write_partition_overwrite_files_with_same_name(
+    mock_uuid, new_dataset, sample_records_iter
+):
+    """This test is to demonstrate existing_data_behavior="overwrite_or_ignore".
+
+    It is extremely unlikely for the uuid.uuid4 method to generate duplicate values,
+    so for testing purposes, this method is patched to return the same value
+    and therefore generate similarly named files.
+    """
+    mock_uuid.return_value = "abc"
+
+    # perform two (2) writes for source="alma" and run_date="2024-12-01"
+    _ = new_dataset.write(sample_records_iter(10))
+    written_files_source_a1 = new_dataset.write(sample_records_iter(7))
+    new_dataset.reload()
+
+    # assert that only the second file exists and overwriting occurs
+    assert os.path.exists(written_files_source_a1[0].path)
+    assert new_dataset.row_count == 7
