@@ -177,10 +177,11 @@ class TIMDEXDataset:
         optimizations (e.g. batching) so that the calling context can focus on yielding
         data.
 
-        For write, the configuration existing_data_behavior="delete_matching" is used.
-        This means that during write, if any pre-existing files are found for the exact
-        combinations of partitions for that batch, those pre-existing files will be
-        deleted.  This effectively makes a write idempotent to the TIMDEX dataset.
+        This method uses the configuration existing_data_behavior="overwrite_or_ignore",
+        which will ignore any existing data and will overwrite files with the same name
+        as the parquet file. Since a UUID is generated for each write via the
+        basename_template, this effectively makes a write idempotent to the
+        TIMDEX dataset.
 
         A max_open_files=500 configuration is set to avoid AWS S3 503 error "SLOW_DOWN"
         if too many PutObject calls are made in parallel.  Testing suggests this does not
@@ -209,7 +210,7 @@ class TIMDEXDataset:
             record_batches_iter,
             base_dir=self.source,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
-            existing_data_behavior="delete_matching",
+            existing_data_behavior="overwrite_or_ignore",
             filesystem=self.filesystem,
             file_visitor=lambda written_file: self._written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
