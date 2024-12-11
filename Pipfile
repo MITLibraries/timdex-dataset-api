@@ -4,6 +4,7 @@ verify_ssl = true
 name = "pypi"
 
 [packages]
+attrs = "*"
 boto3 = "*"
 duckdb = "*"
 pandas = "*"
@@ -14,15 +15,14 @@ black = "*"
 boto3-stubs = {version = "*", extras = ["s3"]}
 coveralls = "*"
 ipython = "*"
+moto = "*"
 mypy = "*"
+pandas-stubs = "*"
 pre-commit = "*"
+pytest-mock = "*"
 pyarrow-stubs = "*"
 pytest = "*"
 ruff = "*"
 setuptools = "*"
-pandas-stubs = "*"
-moto = "*"
-pytest-mock = "*"
-
 [requires]
 python_version = "3.12"
