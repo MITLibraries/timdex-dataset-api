@@ -1,12 +1,15 @@
 """timdex_dataset_api/record.py"""
 
-import datetime
-from dataclasses import asdict, dataclass
+from datetime import UTC, datetime
 
-from timdex_dataset_api.exceptions import InvalidDatasetRecordError
+from attrs import asdict, define, field
 
 
-@dataclass
+def strict_date_parse(date_string: str) -> datetime:
+    return datetime.strptime(date_string, "%Y-%m-%d").astimezone(UTC)
+
+
+@define
 class DatasetRecord:
     """Container for single dataset record.
 
@@ -16,40 +19,34 @@ class DatasetRecord:
     """
 
     # primary columns
-    timdex_record_id: str
-    source_record: bytes
-    transformed_record: bytes
+    timdex_record_id: str = field()
+    source_record: bytes = field()
+    transformed_record: bytes = field()
+    source: str = field()
+    run_date: datetime = field(converter=strict_date_parse)
+    run_type: str = field()
+    run_id: str = field()
+    action: str = field()
 
-    # partition columns
-    source: str | None = None
-    run_date: str | datetime.datetime | None = None
-    run_type: str | None = None
-    run_id: str | None = None
-    action: str | None = None
+    @property
+    def year(self) -> str:
+        return self.run_date.strftime("%Y")
+
+    @property
+    def month(self) -> str:
+        return self.run_date.strftime("%m")
+
+    @property
+    def day(self) -> str:
+        return self.run_date.strftime("%d")
 
     def to_dict(
         self,
-        *,
-        partition_values: dict[str, str | datetime.datetime] | None = None,
-        validate: bool = True,
     ) -> dict:
-        """Serialize instance as dictionary, setting partition values if passed."""
-        if partition_values:
-            for key, value in partition_values.items():
-                setattr(self, key, value)
-        if validate:
-            self.validate()
-        return asdict(self)
-
-    def validate(self) -> None:
-        """Validate DatasetRecord for writing."""
-        # ensure all partition columns are set
-        missing_partition_values = [
-            field
-            for field in ["source", "run_date", "run_type", "run_id", "action"]
-            if getattr(self, field) is None
-        ]
-        if missing_partition_values:
-            raise InvalidDatasetRecordError(
-                f"Partition values are missing: {', '.join(missing_partition_values)}"
-            )
+        """Serialize instance as dictionary."""
+        return {
+            **asdict(self),
+            "year": self.year,
+            "month": self.month,
+            "day": self.day,
+        }
