@@ -2,7 +2,7 @@
 import math
 import os
 import re
-from datetime import UTC, datetime
+from datetime import date
 from unittest.mock import patch
 
 import pyarrow.dataset as ds
@@ -74,7 +74,7 @@ def test_dataset_record_serialization():
         "source_record": b"<record><title>Hello World.</title></record>",
         "transformed_record": b"""{"title":["Hello World."]}""",
         "source": "libguides",
-        "run_date": datetime(2024, 12, 1).astimezone(UTC),
+        "run_date": date(2024, 12, 1),
         "run_type": "full",
         "action": "index",
         "run_id": "abc123",

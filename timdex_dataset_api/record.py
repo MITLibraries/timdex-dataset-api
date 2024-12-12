@@ -1,12 +1,12 @@
 """timdex_dataset_api/record.py"""
 
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 
 from attrs import asdict, define, field
 
 
-def strict_date_parse(date_string: str) -> datetime:
-    return datetime.strptime(date_string, "%Y-%m-%d").astimezone(UTC)
+def strict_date_parse(date_string: str) -> date:
+    return datetime.strptime(date_string, "%Y-%m-%d").astimezone(UTC).date()
 
 
 @define
@@ -23,7 +23,7 @@ class DatasetRecord:
     source_record: bytes = field()
     transformed_record: bytes = field()
     source: str = field()
-    run_date: datetime = field(converter=strict_date_parse)
+    run_date: date = field(converter=strict_date_parse)
     run_type: str = field()
     run_id: str = field()
     action: str = field()
