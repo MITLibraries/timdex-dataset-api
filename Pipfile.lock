@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "d9e081653de47fb0c08e6c6f8e86f46e91d9f55868a240d088603e4af2dd91e3"
+            "sha256": "435a040b3437e87c9c560ceff48b20c73f5c296d15596843cc78f249a613bc7a"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -1145,18 +1145,17 @@
                 "sha256:f591704ac05dfd0477bb8f8e0bd4b5dc52c1cadf50503858dce3a15db6e46ff2",
                 "sha256:f96bd502cb11abb08efea6dab09c003305161cb6c9eafd432e35e76e7fa9b90c"
             ],
-            "index": "pypi",
             "markers": "python_version >= '3.9'",
             "version": "==18.1.0"
         },
         "pyarrow-stubs": {
             "hashes": [
-                "sha256:624b8f47ed207075faeb7a475d87178145adbd709d8feae93d24574b97d9cb42",
-                "sha256:af9433bf1daa27df8e5a6364d5fe7db9feeb203394686c0f01821d52bc571ee0"
+                "sha256:278bad474eeaa0a300d030b0f85a4be335878c31d5dc8a836e695b24114e074e",
+                "sha256:bfebf760db2154cdb2c0fcb0e43024056d6f5a6f0b96b85a039ab224a13b43c8"
             ],
             "index": "pypi",
             "markers": "python_version >= '3.8' and python_version < '4'",
-            "version": "==17.13"
+            "version": "==17.14"
         },
         "pycparser": {
             "hashes": [
