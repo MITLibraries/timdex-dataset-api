@@ -1,7 +1,7 @@
 {
     "_meta": {
         "hash": {
-            "sha256": "d9e081653de47fb0c08e6c6f8e86f46e91d9f55868a240d088603e4af2dd91e3"
+            "sha256": "435a040b3437e87c9c560ceff48b20c73f5c296d15596843cc78f249a613bc7a"
         },
         "pipfile-spec": 6,
         "requires": {
@@ -368,11 +368,12 @@
                 "s3"
             ],
             "hashes": [
-                "sha256:5d023cf1fcc723dfdba29653e0ad9b9933985c813a25bc21807e21eab81e21b4",
-                "sha256:bb7824c09cbf868940b8d500e7f4ca99cb7e074c0f86771f832ce15c33a313bd"
+                "sha256:2184a11bf011df3a079f7d28164838022601265a4a257d07e966d7c32cdb6ea1",
+                "sha256:c6fdac66202938bb2fe568d0c5287d9838ef161f4a2efeb584d8bb92c0a83c79"
             ],
+            "index": "pypi",
             "markers": "python_version >= '3.8'",
-            "version": "==1.35.78"
+            "version": "==1.35.82"
         },
         "botocore": {
             "hashes": [
@@ -384,11 +385,11 @@
         },
         "botocore-stubs": {
             "hashes": [
-                "sha256:4cb5c1fca33048a2afca2002719a8d696f7051ab4f0ef5f5ee96df7aaf76a055",
-                "sha256:86d11b64a72c25766d551a2fedcc93e374d3c9d27aea11a7516af1d357e09637"
+                "sha256:16883fc15998c9246114cd86e0fa74f57623ddd21464046fa0add0e9b85beef9",
+                "sha256:4c365e6cdcad1cfb7e97affc0c6e6a4d04750db22931f2dbc71fcd89bcd28f82"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==1.35.78"
+            "version": "==1.35.82"
         },
         "certifi": {
             "hashes": [
@@ -1342,11 +1343,11 @@
         },
         "types-awscrt": {
             "hashes": [
-                "sha256:b1b9bb10f337e3fe8f5f508860eb354d9fe093f02e1485955a9e0bdd4e250074",
-                "sha256:eeb4bd596100927704c8b9f964ec8a246be4943d546f3fd2a8efdddebea422ea"
+                "sha256:1c4eaadd7489444b1cfe3570d327ce19210c047d2c44dfbfc37c38dba9c87cbb",
+                "sha256:1c9b0ebadf64bcb396d55fcc50a84ade4eb9e6e9e1b79aa97428d8c2d529bf9f"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==0.23.4"
+            "version": "==0.23.5"
         },
         "types-python-dateutil": {
             "hashes": [
