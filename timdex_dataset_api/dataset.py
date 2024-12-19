@@ -46,7 +46,8 @@ TIMDEX_DATASET_PARTITION_COLUMNS = [
     "day",
 ]
 
-TIMDEX_DATASET_FILTER_COLUMNS = [
+# order must match assignment in TIMDEXDataset._get_filtered_dataset
+TIMDEX_DATASET_FILTER_COLUMNS = (
     "timdex_record_id",
     "source",
     "run_date",
@@ -56,7 +57,7 @@ TIMDEX_DATASET_FILTER_COLUMNS = [
     "year",
     "month",
     "day",
-]
+)
 
 
 DEFAULT_BATCH_SIZE = 1_000
@@ -83,6 +84,13 @@ class TIMDEXDataset:
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
         self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
+
+    @property
+    def row_count(self) -> int:
+        """Get row count from loaded dataset."""
+        if not self.dataset:
+            raise DatasetNotLoadedError
+        return self.dataset.count_rows()
 
     def load(
         self,
@@ -143,7 +151,7 @@ class TIMDEXDataset:
         source_path = self.source
         if isinstance(self.source, str):
             source_path = os.path.join(
-                self.source, self.get_partition_prefixes(run_date, year, month, day)
+                self.source, self._get_partition_prefixes(run_date, year, month, day)
             )
 
         # pre load: load dataset lazily, with an optional partition prefix
@@ -224,8 +232,6 @@ class TIMDEXDataset:
         if not self.dataset:
             raise DatasetNotLoadedError
 
-        run_date_date: date | None = None
-
         # instantiate filters dict
         filters_dict = dict(
             zip(
@@ -246,27 +252,7 @@ class TIMDEXDataset:
         )
 
         # get filters for partition columns ('run_date' or 'run_date' components)
-        # update filters dict
-        if run_date is not None:
-            if isinstance(run_date, str):
-                run_date_date = strict_date_parse(run_date)
-            elif isinstance(run_date, date):
-                run_date_date = run_date
-            else:
-                raise ValueError(
-                    "Provided 'run_date' value must be a string matching format "
-                    "'%Y-%m-%d' or a datetime.date."
-                )
-            filters_dict.update(
-                {
-                    "run_date": run_date_date,
-                    "year": run_date_date.strftime("%Y"),
-                    "month": run_date_date.strftime("%m"),
-                    "day": run_date_date.strftime("%d"),
-                }
-            )
-        else:
-            filters_dict.update({"year": year, "month": month, "day": day})
+        filters_dict.update(self._parse_date_filters(run_date))
 
         # create filter expressions for element-wise equality comparisons
         expressions = []
@@ -287,8 +273,8 @@ class TIMDEXDataset:
 
         return self.dataset.filter(combined_expressions)
 
-    @staticmethod
-    def get_partition_prefixes(
+    def _get_partition_prefixes(
+        self,
         run_date: str | date | None = None,
         year: str | None = None,
         month: str | None = None,
@@ -308,22 +294,12 @@ class TIMDEXDataset:
 
         Returns a string of partition prefixes: "year=2024/month=12/day=01".
         """
-        run_date_date: date | None = None
-
         if run_date:
-            if isinstance(run_date, str):
-                run_date_date = strict_date_parse(run_date)
-            elif isinstance(run_date, date):
-                run_date_date = run_date
-            else:
-                raise ValueError(
-                    "Provided 'run_date' value must be a string matching format "
-                    "'%Y-%m-%d' or a datetime.date."
-                )
+            run_date_filters = self._parse_date_filters(run_date)
             return (
-                f"year={run_date_date.strftime("%Y")}/"
-                f"month={run_date_date.strftime("%m")}/"
-                f"day={run_date_date.strftime("%d")}"
+                f"year={run_date_filters["year"]}/"
+                f"month={run_date_filters["month"]}/"
+                f"day={run_date_filters["day"]}"
             )
 
         partition_prefixes = []
@@ -347,6 +323,28 @@ class TIMDEXDataset:
             f"{partition_column}={partition_value}"
             for partition_column, partition_value in partition_prefixes_dict.items()
         )
+
+    def _parse_date_filters(self, run_date: str | date | None) -> dict:
+        date_filters = {}
+        if run_date is not None:
+            if isinstance(run_date, str):
+                run_date_obj = strict_date_parse(run_date)
+            elif isinstance(run_date, date):
+                run_date_obj = run_date
+            else:
+                raise ValueError(
+                    "Provided 'run_date' value must be a string matching format "
+                    "'%Y-%m-%d' or a datetime.date."
+                )
+            date_filters.update(
+                {
+                    "run_date": run_date_obj,
+                    "year": run_date_obj.strftime("%Y"),
+                    "month": run_date_obj.strftime("%m"),
+                    "day": run_date_obj.strftime("%d"),
+                }
+            )
+        return date_filters
 
     @staticmethod
     def get_s3_filesystem() -> fs.FileSystem:
@@ -406,13 +404,6 @@ class TIMDEXDataset:
         else:
             raise ValueError("Mixed S3 and local paths are not supported.")
         return filesystem, source
-
-    @property
-    def row_count(self) -> int:
-        """Get row count from loaded dataset."""
-        if not self.dataset:
-            raise DatasetNotLoadedError
-        return self.dataset.count_rows()
 
     def write(
         self,

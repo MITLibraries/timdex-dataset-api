@@ -206,14 +206,14 @@ def test_dataset_get_filtered_dataset_by_run_date_if_invalid_type_raise_error(
             "or a datetime.date."
         ),
     ):
-        _ = fixed_local_dataset._get_filtered_dataset(run_date=0)
+        _ = fixed_local_dataset._get_filtered_dataset(run_date=999)
 
 
 def test_dataset_get_partition_prefixes_with_run_date_success():
     timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
 
     assert (
-        timdex_dataset.get_partition_prefixes(run_date="2024-12-01")
+        timdex_dataset._get_partition_prefixes(run_date="2024-12-01")
         == "year=2024/month=12/day=01"
     )
 
@@ -222,13 +222,13 @@ def test_dataset_get_partition_prefixes_without_run_date_success():
     timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
 
     assert (
-        timdex_dataset.get_partition_prefixes(year="2024", month="12", day="01")
+        timdex_dataset._get_partition_prefixes(year="2024", month="12", day="01")
     ) == "year=2024/month=12/day=01"
     assert (
-        timdex_dataset.get_partition_prefixes(year="2024", month="12")
+        timdex_dataset._get_partition_prefixes(year="2024", month="12")
         == "year=2024/month=12"
     )
-    assert timdex_dataset.get_partition_prefixes(year="2024") == "year=2024"
+    assert timdex_dataset._get_partition_prefixes(year="2024") == "year=2024"
 
 
 def test_dataset_get_partition_prefixes_without_run_date_raise_error():
@@ -236,7 +236,7 @@ def test_dataset_get_partition_prefixes_without_run_date_raise_error():
     with pytest.raises(
         ValueError, match="Insufficient arguments to construct a valid partition prefix."
     ):
-        assert timdex_dataset.get_partition_prefixes(month="12", day="01")
+        assert timdex_dataset._get_partition_prefixes(month="12", day="01")
 
 
 def test_dataset_get_s3_filesystem_success(mocker):
