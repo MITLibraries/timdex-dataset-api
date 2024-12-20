@@ -2,7 +2,6 @@
 
 import itertools
 import operator
-import os
 import time
 import uuid
 from collections.abc import Iterator
@@ -110,9 +109,11 @@ class TIMDEXDataset:
         This method sets a pyarrow.dataset.Dataset to the TIMDEXDataset.dataset
         attribute. Loading comprises of two main steps:
 
-        - pre load: Append a partition prefix to self.source using either 'run_date'
-            or 'run_date' components to skip reading unecessary data partitions.
-        - post load: Lazily filter TIMDEXDataset.
+        - load: Lazily load full dataset. PyArrow will "discover" full dataset.
+            Note: This step may take a couple of seconds but leans on PyArrow's
+            parquet reading processes.
+        - filter: Lazily filter rows in the PyArrow dataset by conditions on
+            TIMDEX_DATASET_FILTER_COLUMNS.
 
         The dataset is loaded via the expected schema as defined by module constant
         TIMDEX_DATASET_SCHEMA.  If the target dataset differs in any way, errors may be
@@ -127,14 +128,9 @@ class TIMDEXDataset:
                 - month (str | None, optional)
                 - day (str | None, optional)
 
-                If 'run_date' is provided, partition prefixes are derived by parsing
-                'run_date' into its individual components.
-                    - 'run_date' str values must match date format "%Y-%m-%d".
-
-                If 'run_date' is not provided, partition prefixes are derived using
-                provided values for individual 'run_date' components: year, month, day.
-                See TIMDEXDataset.get_partition_prefix to see accepted combination
-                of args.
+                If 'run_date' is provided, partition filters are derived by parsing
+                a datetime.date object from the 'run_date' value and extracting
+                ymd values to use in filter expression.
 
             Non-partition columns
                 - timdex_record_id (str | None, optional)
@@ -148,22 +144,16 @@ class TIMDEXDataset:
         """
         start_time = time.perf_counter()
 
-        source_path = self.source
-        if isinstance(self.source, str):
-            source_path = os.path.join(
-                self.source, self._get_partition_prefixes(run_date, year, month, day)
-            )
-
-        # pre load: load dataset lazily, with an optional partition prefix
+        # lazy load full dataset
         self.dataset = ds.dataset(
-            source_path,
+            self.source,
             schema=self.schema,
             format="parquet",
             partitioning="hive",
             filesystem=self.filesystem,
         )
 
-        # post load: filter dataset
+        # filter dataset
         self.dataset = self._get_filtered_dataset(
             timdex_record_id=timdex_record_id,
             source=source,
@@ -252,7 +242,8 @@ class TIMDEXDataset:
         )
 
         # get filters for partition columns ('run_date' or 'run_date' components)
-        filters_dict.update(self._parse_date_filters(run_date))
+        if run_date:
+            filters_dict.update(self._parse_date_filters(run_date))
 
         # create filter expressions for element-wise equality comparisons
         expressions = []
@@ -273,78 +264,38 @@ class TIMDEXDataset:
 
         return self.dataset.filter(combined_expressions)
 
-    def _get_partition_prefixes(
-        self,
-        run_date: str | date | None = None,
-        year: str | None = None,
-        month: str | None = None,
-        day: str | None = None,
-    ) -> str:
-        """Derive partition prefixes from provided 'run_date' or 'run_date' components.
-
-        Argument 'run_date' is a date string formatted as "YYYY-MM-DD". If not provided,
-        the arguments 'year', 'month', and 'date' (also string values) must be provided
-        in specific combinations:
-
-            - year, month, day
-            - year, month
-            - year
-
-            Any other combinations are insufficient to construct a valid partition prefix.
-
-        Returns a string of partition prefixes: "year=2024/month=12/day=01".
-        """
-        if run_date:
-            run_date_filters = self._parse_date_filters(run_date)
-            return (
-                f"year={run_date_filters["year"]}/"
-                f"month={run_date_filters["month"]}/"
-                f"day={run_date_filters["day"]}"
-            )
-
-        partition_prefixes = []
-        if year and month and day:
-            partition_prefixes.extend([year, month, day])
-        elif year and month and day is None:
-            partition_prefixes.extend([year, month])
-        elif year and month is None and day is None:
-            partition_prefixes.extend([year])
-        elif year is None and month is None and day is None:
-            return ""
-        else:
-            raise ValueError(
-                "Insufficient arguments to construct a valid partition prefix."
-            )
-
-        partition_prefixes_dict = dict(
-            zip(TIMDEX_DATASET_PARTITION_COLUMNS, partition_prefixes, strict=False),
-        )
-        return "/".join(
-            f"{partition_column}={partition_value}"
-            for partition_column, partition_value in partition_prefixes_dict.items()
-        )
-
     def _parse_date_filters(self, run_date: str | date | None) -> dict:
-        date_filters = {}
-        if run_date is not None:
-            if isinstance(run_date, str):
-                run_date_obj = strict_date_parse(run_date)
-            elif isinstance(run_date, date):
-                run_date_obj = run_date
-            else:
-                raise ValueError(
-                    "Provided 'run_date' value must be a string matching format "
-                    "'%Y-%m-%d' or a datetime.date."
-                )
-            date_filters.update(
-                {
-                    "run_date": run_date_obj,
-                    "year": run_date_obj.strftime("%Y"),
-                    "month": run_date_obj.strftime("%m"),
-                    "day": run_date_obj.strftime("%d"),
-                }
+        """Parse date filters from 'run_date'.
+
+        Args:
+            run_date (str | date | None): If str, the value must match the
+                date format "%Y-%m-%d"; if date, ymd values are extracted
+                as str.
+
+        Raises:
+            TypeError: Raised when 'run_date' is an invalid type.
+            ValueError: Raised when either a datetime.date object cannot be parsed
+                from a provided 'run_date' str.
+
+        Returns:
+            dict: 'run_date' filters.
+        """
+        if isinstance(run_date, str):
+            run_date_obj = strict_date_parse(run_date)
+        elif isinstance(run_date, date):
+            run_date_obj = run_date
+        else:
+            raise TypeError(
+                "Provided 'run_date' value must be a string matching format "
+                "'%Y-%m-%d' or a datetime.date."
             )
-        return date_filters
+
+        return {
+            "run_date": run_date_obj,
+            "year": run_date_obj.strftime("%Y"),
+            "month": run_date_obj.strftime("%m"),
+            "day": run_date_obj.strftime("%d"),
+        }
 
     @staticmethod
     def get_s3_filesystem() -> fs.FileSystem:

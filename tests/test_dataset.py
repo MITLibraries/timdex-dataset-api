@@ -35,7 +35,7 @@ def test_dataset_load_local_sets_filesystem_and_dataset_success(
     result = timdex_dataset.load()
 
     mock_pyarrow_ds.assert_called_once_with(
-        "local/path/to/dataset/",
+        "local/path/to/dataset",
         schema=timdex_dataset.schema,
         format="parquet",
         partitioning="hive",
@@ -59,7 +59,7 @@ def test_dataset_load_s3_sets_filesystem_and_dataset_success(
 
     mock_get_s3_fs.assert_called_once()
     mock_pyarrow_ds.assert_called_once_with(
-        "bucket/path/to/dataset/",
+        "bucket/path/to/dataset",
         schema=timdex_dataset.schema,
         format="parquet",
         partitioning="hive",
@@ -69,60 +69,55 @@ def test_dataset_load_s3_sets_filesystem_and_dataset_success(
     assert result is None
 
 
-@patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
-@patch("timdex_dataset_api.dataset.ds.dataset")
-def test_dataset_load_with_partition_prefix_via_run_date_success(
-    mock_pyarrow_ds, mock_local_fs
-):
-    mock_local_fs.return_value = MagicMock()
-    mock_pyarrow_ds.return_value = MagicMock()
-
-    timdex_dataset = TIMDEXDataset(location="local/path/to/dataset")
-    timdex_dataset.load(run_date="2024-12-01")
-
-    mock_pyarrow_ds.assert_called_once_with(
-        "local/path/to/dataset/year=2024/month=12/day=01",
-        schema=timdex_dataset.schema,
-        format="parquet",
-        partitioning="hive",
-        filesystem=mock_local_fs.return_value,
-    )
-
-
-@patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
-@patch("timdex_dataset_api.dataset.ds.dataset")
-def test_dataset_load_with_partition_prefix_via_run_date_components_success(
-    mock_pyarrow_ds, mock_local_fs
-):
-    mock_local_fs.return_value = MagicMock()
-    mock_pyarrow_ds.return_value = MagicMock()
-
-    timdex_dataset = TIMDEXDataset(location="local/path/to/dataset")
-    timdex_dataset.load(year="2024")
-
-    mock_pyarrow_ds.assert_called_once_with(
-        "local/path/to/dataset/year=2024",
-        schema=timdex_dataset.schema,
-        format="parquet",
-        partitioning="hive",
-        filesystem=mock_local_fs.return_value,
-    )
-
-
-def test_dataset_load_no_filters_success(fixed_local_dataset):
+def test_dataset_load_without_filters_success(fixed_local_dataset):
     fixed_local_dataset.load()
 
     assert os.path.exists(fixed_local_dataset.location)
     assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
 
 
-def test_dataset_load_and_filter_by_non_partition_field_success(fixed_local_dataset):
+def test_dataset_load_with_run_date_str_filters_success(fixed_local_dataset):
+    fixed_local_dataset.load(run_date="2024-12-01")
+
+    assert os.path.exists(fixed_local_dataset.location)
+    assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
+
+
+def test_dataset_load_with_run_date_obj_filters_success(fixed_local_dataset):
+    fixed_local_dataset.load(run_date=date(2024, 12, 1))
+
+    assert os.path.exists(fixed_local_dataset.location)
+    assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
+
+
+def test_dataset_load_with_ymd_filters_success(fixed_local_dataset):
+    fixed_local_dataset.load(year="2024", month="12", day="01")
+
+    assert os.path.exists(fixed_local_dataset.location)
+    assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
+
+
+def test_dataset_load_with_single_nonpartition_filters_success(fixed_local_dataset):
     fixed_local_dataset.load(timdex_record_id="alma:0")
 
     assert fixed_local_dataset.row_count == 1
 
 
-def test_dataset_get_filtered_dataset_by_all_fields_success(fixed_local_dataset):
+def test_dataset_load_with_multi_nonpartition_filters_success(fixed_local_dataset):
+    fixed_local_dataset.load(
+        timdex_record_id="alma:0",
+        source="alma",
+        run_type="daily",
+        run_id="abc123",
+        action="index",
+    )
+
+    assert fixed_local_dataset.row_count == 1
+
+
+def test_dataset_get_filtered_dataset_with_multi_nonpartition_filters_success(
+    fixed_local_dataset,
+):
     fixed_local_dataset.load()  # initial load dataset, no filters passed
 
     filtered_local_dataset = fixed_local_dataset._get_filtered_dataset(
@@ -138,7 +133,9 @@ def test_dataset_get_filtered_dataset_by_all_fields_success(fixed_local_dataset)
     assert filtered_local_df["timdex_record_id"].iloc[0] == "alma:0"
 
 
-def test_dataset_get_filtered_dataset_by_single_fields_success(fixed_local_dataset):
+def test_dataset_get_filtered_dataset_with_single_nonpartition_success(
+    fixed_local_dataset,
+):
     fixed_local_dataset.load()  # initial load dataset, no filters passed
 
     filtered_local_dataset = fixed_local_dataset._get_filtered_dataset(
@@ -152,7 +149,7 @@ def test_dataset_get_filtered_dataset_by_single_fields_success(fixed_local_datas
     assert filtered_local_df["run_id"].unique() == ["abc123"]
 
 
-def test_dataset_get_filtered_dataset_by_run_date_str_successs(fixed_local_dataset):
+def test_dataset_get_filtered_dataset_with_run_date_str_successs(fixed_local_dataset):
     fixed_local_dataset.load()  # initial load dataset, no filters passed
 
     filtered_local_dataset = fixed_local_dataset._get_filtered_dataset(
@@ -166,7 +163,7 @@ def test_dataset_get_filtered_dataset_by_run_date_str_successs(fixed_local_datas
     assert empty_local_dataset.count_rows() == 0
 
 
-def test_dataset_get_filtered_dataset_by_run_date_date_success(fixed_local_dataset):
+def test_dataset_get_filtered_dataset_with_run_date_obj_success(fixed_local_dataset):
     fixed_local_dataset.load()  # initial load dataset, no filters passed
 
     filtered_local_dataset = fixed_local_dataset._get_filtered_dataset(
@@ -182,7 +179,7 @@ def test_dataset_get_filtered_dataset_by_run_date_date_success(fixed_local_datas
     assert empty_local_dataset.count_rows() == 0
 
 
-def test_dataset_get_filtered_dataset_by_run_date_components_success(fixed_local_dataset):
+def test_dataset_get_filtered_dataset_with_ymd_success(fixed_local_dataset):
     fixed_local_dataset.load()  # initial load dataset, no filters passed
 
     filtered_local_dataset = fixed_local_dataset._get_filtered_dataset(year="2024")
@@ -194,49 +191,19 @@ def test_dataset_get_filtered_dataset_by_run_date_components_success(fixed_local
     assert empty_local_dataset.count_rows() == 0
 
 
-def test_dataset_get_filtered_dataset_by_run_date_if_invalid_type_raise_error(
+def test_dataset_get_filtered_dataset_with_run_date_invalid_raise_error(
     fixed_local_dataset,
 ):
     fixed_local_dataset.load()  # initial load dataset, no filters passed
 
     with pytest.raises(
-        ValueError,
+        TypeError,
         match=(
             "Provided 'run_date' value must be a string matching format '%Y-%m-%d' "
             "or a datetime.date."
         ),
     ):
         _ = fixed_local_dataset._get_filtered_dataset(run_date=999)
-
-
-def test_dataset_get_partition_prefixes_with_run_date_success():
-    timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
-
-    assert (
-        timdex_dataset._get_partition_prefixes(run_date="2024-12-01")
-        == "year=2024/month=12/day=01"
-    )
-
-
-def test_dataset_get_partition_prefixes_without_run_date_success():
-    timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
-
-    assert (
-        timdex_dataset._get_partition_prefixes(year="2024", month="12", day="01")
-    ) == "year=2024/month=12/day=01"
-    assert (
-        timdex_dataset._get_partition_prefixes(year="2024", month="12")
-        == "year=2024/month=12"
-    )
-    assert timdex_dataset._get_partition_prefixes(year="2024") == "year=2024"
-
-
-def test_dataset_get_partition_prefixes_without_run_date_raise_error():
-    timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
-    with pytest.raises(
-        ValueError, match="Insufficient arguments to construct a valid partition prefix."
-    ):
-        assert timdex_dataset._get_partition_prefixes(month="12", day="01")
 
 
 def test_dataset_get_s3_filesystem_success(mocker):

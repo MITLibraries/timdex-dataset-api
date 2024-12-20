@@ -22,6 +22,7 @@ classifiers = [
 ]
 
 dependencies = [
+    "attrs",
     "boto3",
     "duckdb",
     "pandas",
