@@ -2,7 +2,7 @@
 import math
 import os
 import re
-from datetime import UTC, datetime
+from datetime import date
 from unittest.mock import patch
 
 import pyarrow.dataset as ds
@@ -12,7 +12,6 @@ from tests.utils import generate_sample_records
 from timdex_dataset_api.dataset import (
     MAX_ROWS_PER_FILE,
     TIMDEX_DATASET_SCHEMA,
-    DatasetNotLoadedError,
     TIMDEXDataset,
 )
 from timdex_dataset_api.record import DatasetRecord
@@ -30,6 +29,7 @@ def test_dataset_record_init():
         "run_id": "000-111-aaa-bbb",
     }
     record = DatasetRecord(**values)
+
     assert record
     assert (record.year, record.month, record.day) == (
         "2024",
@@ -49,6 +49,7 @@ def test_dataset_record_init_with_invalid_run_date_raise_error():
         "action": "index",
         "run_id": "000-111-aaa-bbb",
     }
+
     with pytest.raises(
         ValueError, match=re.escape("time data '-12-01' does not match format '%Y-%m-%d'")
     ):
@@ -67,12 +68,13 @@ def test_dataset_record_serialization():
         "run_id": "abc123",
     }
     dataset_record = DatasetRecord(**values)
+
     assert dataset_record.to_dict() == {
         "timdex_record_id": "alma:123",
         "source_record": b"<record><title>Hello World.</title></record>",
         "transformed_record": b"""{"title":["Hello World."]}""",
         "source": "libguides",
-        "run_date": datetime(2024, 12, 1).astimezone(UTC),
+        "run_date": date(2024, 12, 1),
         "run_type": "full",
         "action": "index",
         "run_id": "abc123",
@@ -82,47 +84,38 @@ def test_dataset_record_serialization():
     }
 
 
-def test_dataset_write_records_to_new_dataset(new_dataset, sample_records_iter):
-    files_written = new_dataset.write(sample_records_iter(10_000))
-    assert len(files_written) == 1
-    assert os.path.exists(new_dataset.location)
+def test_dataset_write_records_to_new_local_dataset(
+    new_local_dataset, sample_records_iter
+):
+    written_files = new_local_dataset.write(sample_records_iter(10_000))
+    new_local_dataset.load()
 
-    # load newly created dataset as new TIMDEXDataset instance
-    dataset = TIMDEXDataset.load(new_dataset.location)
-    assert dataset.row_count == 10_000
-
-
-def test_dataset_reload_after_write(new_dataset, sample_records_iter):
-    files_written = new_dataset.write(sample_records_iter(10_000))
-    assert len(files_written) == 1
-    assert os.path.exists(new_dataset.location)
-
-    # attempt row count before reload
-    with pytest.raises(DatasetNotLoadedError):
-        _ = new_dataset.row_count
-
-    # attempt row count after reload
-    new_dataset.reload()
-    assert new_dataset.row_count == 10_000
+    assert len(written_files) == 1
+    assert os.path.exists(new_local_dataset.location)
+    assert new_local_dataset.row_count == 10_000
 
 
-def test_dataset_write_default_max_rows_per_file(new_dataset, sample_records_iter):
+def test_dataset_write_default_max_rows_per_file(new_local_dataset, sample_records_iter):
     """Default is 100k rows per file, therefore writing 200,033 records should result in
     3 files (x2 @ 100k rows, x1 @ 33 rows)."""
     total_records = 200_033
 
-    new_dataset.write(sample_records_iter(total_records))
-    new_dataset.reload()
+    new_local_dataset.write(sample_records_iter(total_records))
+    new_local_dataset.load()
 
-    assert new_dataset.row_count == total_records
-    assert len(new_dataset.dataset.files) == math.ceil(total_records / MAX_ROWS_PER_FILE)
+    assert new_local_dataset.row_count == total_records
+    assert len(new_local_dataset.dataset.files) == math.ceil(
+        total_records / MAX_ROWS_PER_FILE
+    )
 
 
-def test_dataset_write_record_batches_uses_batch_size(new_dataset, sample_records_iter):
+def test_dataset_write_record_batches_uses_batch_size(
+    new_local_dataset, sample_records_iter
+):
     total_records = 101
     batch_size = 50
     batches = list(
-        new_dataset.get_dataset_record_batches(
+        new_local_dataset.get_dataset_record_batches(
             sample_records_iter(total_records), batch_size=batch_size
         )
     )
@@ -140,13 +133,13 @@ def test_dataset_write_to_multiple_locations_raise_error(sample_records_iter):
         timdex_dataset.write(sample_records_iter(10))
 
 
-def test_dataset_write_schema_applied_to_dataset(new_dataset, sample_records_iter):
-    new_dataset.write(sample_records_iter(10))
+def test_dataset_write_schema_applied_to_dataset(new_local_dataset, sample_records_iter):
+    new_local_dataset.write(sample_records_iter(10))
 
     # manually load dataset to confirm schema without TIMDEXDataset projecting schema
     # during load
     dataset = ds.dataset(
-        new_dataset.location,
+        new_local_dataset.location,
         format="parquet",
         partitioning="hive",
     )
@@ -154,49 +147,55 @@ def test_dataset_write_schema_applied_to_dataset(new_dataset, sample_records_ite
     assert set(dataset.schema.names) == set(TIMDEX_DATASET_SCHEMA.names)
 
 
-def test_dataset_write_partition_for_single_source(new_dataset, sample_records_iter):
-    written_files = new_dataset.write(sample_records_iter(10))
+def test_dataset_write_partition_for_single_source(
+    new_local_dataset, sample_records_iter
+):
+    written_files = new_local_dataset.write(sample_records_iter(10))
     assert len(written_files) == 1
-    assert os.path.exists(new_dataset.location)
+    assert os.path.exists(new_local_dataset.location)
     assert "year=2024/month=12/day=01" in written_files[0].path
 
 
-def test_dataset_write_partition_for_multiple_sources(new_dataset, sample_records_iter):
+def test_dataset_write_partition_for_multiple_sources(
+    new_local_dataset, sample_records_iter
+):
     # perform write for source="alma" and run_date="2024-12-01"
-    written_files_source_a = new_dataset.write(sample_records_iter(10))
-    new_dataset.reload()
+    written_files_source_a = new_local_dataset.write(sample_records_iter(10))
+    new_local_dataset.load()
 
     assert os.path.exists(written_files_source_a[0].path)
-    assert new_dataset.row_count == 10
+    assert new_local_dataset.row_count == 10
 
     # perform write for source="libguides" and run_date="2024-12-01"
-    written_files_source_b = new_dataset.write(
+    written_files_source_b = new_local_dataset.write(
         generate_sample_records(
             num_records=7, timdex_record_id_prefix="libguides", source="libguides"
         )
     )
-    new_dataset.reload()
+    new_local_dataset.load()
 
     assert os.path.exists(written_files_source_b[0].path)
     assert os.path.exists(written_files_source_a[0].path)
-    assert new_dataset.row_count == 17
+    assert new_local_dataset.row_count == 17
 
 
-def test_dataset_write_partition_ignore_existing_data(new_dataset, sample_records_iter):
+def test_dataset_write_partition_ignore_existing_data(
+    new_local_dataset, sample_records_iter
+):
     # perform two (2) writes for source="alma" and run_date="2024-12-01"
-    written_files_source_a0 = new_dataset.write(sample_records_iter(10))
-    written_files_source_a1 = new_dataset.write(sample_records_iter(10))
-    new_dataset.reload()
+    written_files_source_a0 = new_local_dataset.write(sample_records_iter(10))
+    written_files_source_a1 = new_local_dataset.write(sample_records_iter(10))
+    new_local_dataset.load()
 
     # assert that both files exist and no overwriting occurs
     assert os.path.exists(written_files_source_a0[0].path)
     assert os.path.exists(written_files_source_a1[0].path)
-    assert new_dataset.row_count == 20
+    assert new_local_dataset.row_count == 20
 
 
 @patch("timdex_dataset_api.dataset.uuid.uuid4")
 def test_dataset_write_partition_overwrite_files_with_same_name(
-    mock_uuid, new_dataset, sample_records_iter
+    mock_uuid, new_local_dataset, sample_records_iter
 ):
     """This test is to demonstrate existing_data_behavior="overwrite_or_ignore".
 
@@ -207,10 +206,10 @@ def test_dataset_write_partition_overwrite_files_with_same_name(
     mock_uuid.return_value = "abc"
 
     # perform two (2) writes for source="alma" and run_date="2024-12-01"
-    _ = new_dataset.write(sample_records_iter(10))
-    written_files_source_a1 = new_dataset.write(sample_records_iter(7))
-    new_dataset.reload()
+    _ = new_local_dataset.write(sample_records_iter(10))
+    written_files_source_a1 = new_local_dataset.write(sample_records_iter(7))
+    new_local_dataset.load()
 
     # assert that only the second file exists and overwriting occurs
     assert os.path.exists(written_files_source_a1[0].path)
-    assert new_dataset.row_count == 7
+    assert new_local_dataset.row_count == 7

@@ -1,13 +1,17 @@
 """timdex_dataset_api/dataset.py"""
 
 import itertools
+import operator
 import time
 import uuid
 from collections.abc import Iterator
+from datetime import UTC, date, datetime
+from functools import reduce
 from typing import TYPE_CHECKING
 
 import boto3
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from pyarrow import fs
 
@@ -41,14 +45,38 @@ TIMDEX_DATASET_PARTITION_COLUMNS = [
     "day",
 ]
 
+# order must match assignment in TIMDEXDataset._get_filtered_dataset
+TIMDEX_DATASET_FILTER_COLUMNS = (
+    "timdex_record_id",
+    "source",
+    "run_date",
+    "run_type",
+    "run_id",
+    "action",
+    "year",
+    "month",
+    "day",
+)
+
+
 DEFAULT_BATCH_SIZE = 1_000
 MAX_ROWS_PER_GROUP = DEFAULT_BATCH_SIZE
 MAX_ROWS_PER_FILE = 100_000
 
 
+def strict_date_parse(date_string: str) -> date:
+    return datetime.strptime(date_string, "%Y-%m-%d").astimezone(UTC).date()
+
+
 class TIMDEXDataset:
 
     def __init__(self, location: str | list[str]):
+        """Initialize TIMDEXDataset object.
+
+        Args:
+            location (str | list[str]): Local filesystem path or an S3 URI to
+                a parquet dataset. For partitioned datasets, set to the base directory.
+        """
         self.location = location
         self.filesystem, self.source = self.parse_location(self.location)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
@@ -56,16 +84,218 @@ class TIMDEXDataset:
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
         self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
 
-    @classmethod
-    def load(cls, location: str) -> "TIMDEXDataset":
-        """Return an instantiated TIMDEXDataset object given a dataset location.
+    @property
+    def row_count(self) -> int:
+        """Get row count from loaded dataset."""
+        if not self.dataset:
+            raise DatasetNotLoadedError
+        return self.dataset.count_rows()
 
-        Argument 'location' may be a local filesystem path or an S3 URI to a parquet
-        dataset.
+    def load(
+        self,
+        *,
+        timdex_record_id: str | None = None,
+        source: str | None = None,
+        run_date: str | date | None = None,
+        run_type: str | None = None,
+        run_id: str | None = None,
+        action: str | None = None,
+        year: str | None = None,
+        month: str | None = None,
+        day: str | None = None,
+    ) -> None:
+        """Lazy load a pyarrow.dataset.Dataset to a TIMDEXDataset.
+
+        This method sets a pyarrow.dataset.Dataset to the TIMDEXDataset.dataset
+        attribute. Loading comprises of two main steps:
+
+        - load: Lazily load full dataset. PyArrow will "discover" full dataset.
+            Note: This step may take a couple of seconds but leans on PyArrow's
+            parquet reading processes.
+        - filter: Lazily filter rows in the PyArrow dataset by conditions on
+            TIMDEX_DATASET_FILTER_COLUMNS.
+
+        The dataset is loaded via the expected schema as defined by module constant
+        TIMDEX_DATASET_SCHEMA.  If the target dataset differs in any way, errors may be
+        raised when reading or writing data.
+
+        Args:
+            All args are optional and must be passed in as keyword args.
+
+            Partition columns:
+                - run_date (str | date | None, optional)
+                - year (str | None, optional)
+                - month (str | None, optional)
+                - day (str | None, optional)
+
+                If 'run_date' is provided, partition filters are derived by parsing
+                a datetime.date object from the 'run_date' value and extracting
+                ymd values to use in filter expression.
+
+            Non-partition columns
+                - timdex_record_id (str | None, optional)
+                - source (str | None, optional)
+                - run_type (str | None, optional)
+                - run_id (str | None, optional)
+                - action (str | None, optional)
+
+                Any values specified for each column will be used to filter
+                the dataset to rows matching column-value pairs.
         """
-        timdex_dataset = cls(location=location)
-        timdex_dataset.dataset = timdex_dataset.load_dataset()
-        return timdex_dataset
+        start_time = time.perf_counter()
+
+        # lazy load full dataset
+        self.dataset = ds.dataset(
+            self.source,
+            schema=self.schema,
+            format="parquet",
+            partitioning="hive",
+            filesystem=self.filesystem,
+        )
+
+        # filter dataset
+        self.dataset = self._get_filtered_dataset(
+            timdex_record_id=timdex_record_id,
+            source=source,
+            run_date=run_date,
+            run_type=run_type,
+            run_id=run_id,
+            action=action,
+            year=year,
+            month=month,
+            day=day,
+        )
+
+        logger.info(
+            f"Dataset successfully loaded: '{self.location}', "
+            f"{round(time.perf_counter()-start_time, 2)}s"
+        )
+
+    def _get_filtered_dataset(
+        self,
+        *,
+        timdex_record_id: str | None = None,
+        source: str | None = None,
+        run_date: str | date | None = None,
+        run_type: str | None = None,
+        run_id: str | None = None,
+        action: str | None = None,
+        year: str | None = None,
+        month: str | None = None,
+        day: str | None = None,
+    ) -> ds.Dataset:
+        """Lazy filter a pyarrow.dataset.Dataset on a TIMDEXDataset.
+
+        This method will construct a single pyarrow.compute.Expression
+        that is combined from individual equality comparison predicates
+        using the provided filters.
+
+        Args:
+            All args are optional and must be passed in as keyword args.
+
+            Run date columns
+                - run_date (str | date | None, optional)
+                - year (str | None, optional)
+                - month (str | None, optional)
+                - day (str | None, optional)
+
+            If 'run_date' is provided, the 'year', 'month', and 'day' values
+            are parsed from 'run_date'.
+
+            Other columns:
+                - timdex_record_id (str | None, optional)
+                - source (str | None, optional)
+                - run_type (str | None, optional)
+                - run_id (str | None, optional)
+                - action (str | None, optional)
+
+        Raises:
+            DatasetNotLoadedError: Raised if `self.dataset` is None.
+                TIMDEXDataset.load must be called before any filter method calls.
+            ValueError: Raised if provided 'run_date' is an invalid type or
+                cannot be parsed.
+
+        Returns:
+            ds.Dataset: Original pyarrow.dataset.Dataset (if no filters applied)
+                or new pyarrow.dataset.Dataset with applied filters.
+        """
+        if not self.dataset:
+            raise DatasetNotLoadedError
+
+        # instantiate filters dict
+        filters_dict = dict(
+            zip(
+                TIMDEX_DATASET_FILTER_COLUMNS,
+                [
+                    timdex_record_id,
+                    source,
+                    run_date,
+                    run_type,
+                    run_id,
+                    action,
+                    year,
+                    month,
+                    day,
+                ],
+                strict=False,
+            ),
+        )
+
+        # get filters for partition columns ('run_date' or 'run_date' components)
+        if run_date:
+            filters_dict.update(self._parse_date_filters(run_date))
+
+        # create filter expressions for element-wise equality comparisons
+        expressions = []
+        for field, value in filters_dict.items():
+            if value:
+                expressions.append(pc.equal(pc.field(field), value))
+
+        # if filter expressions not found, return original dataset
+        if not expressions:
+            return self.dataset
+
+        # combine filter expressions as a single predicate
+        combined_expressions = reduce(operator.and_, expressions)
+        logger.debug(
+            "Filtering dataset based on the following column-value pairs: "
+            f"{combined_expressions}"
+        )
+
+        return self.dataset.filter(combined_expressions)
+
+    def _parse_date_filters(self, run_date: str | date | None) -> dict:
+        """Parse date filters from 'run_date'.
+
+        Args:
+            run_date (str | date | None): If str, the value must match the
+                date format "%Y-%m-%d"; if date, ymd values are extracted
+                as str.
+
+        Raises:
+            TypeError: Raised when 'run_date' is an invalid type.
+            ValueError: Raised when either a datetime.date object cannot be parsed
+                from a provided 'run_date' str.
+
+        Returns:
+            dict: 'run_date' filters.
+        """
+        if isinstance(run_date, str):
+            run_date_obj = strict_date_parse(run_date)
+        elif isinstance(run_date, date):
+            run_date_obj = run_date
+        else:
+            raise TypeError(
+                "Provided 'run_date' value must be a string matching format "
+                "'%Y-%m-%d' or a datetime.date."
+            )
+
+        return {
+            "run_date": run_date_obj,
+            "year": run_date_obj.strftime("%Y"),
+            "month": run_date_obj.strftime("%m"),
+            "day": run_date_obj.strftime("%d"),
+        }
 
     @staticmethod
     def get_s3_filesystem() -> fs.FileSystem:
@@ -125,42 +355,6 @@ class TIMDEXDataset:
         else:
             raise ValueError("Mixed S3 and local paths are not supported.")
         return filesystem, source
-
-    def load_dataset(self) -> ds.Dataset:
-        """Lazy load a pyarrow.Dataset for an already instantiated TIMDEXDataset object.
-
-        The dataset is loaded via the expected schema as defined by module constant
-        TIMDEX_DATASET_SCHEMA.  If the target dataset differs in any way, errors may be
-        raised when reading or writing data.
-        """
-        start_time = time.perf_counter()
-        dataset = ds.dataset(
-            self.source,
-            schema=self.schema,
-            format="parquet",
-            partitioning="hive",
-            filesystem=self.filesystem,
-        )
-        logger.info(
-            f"Dataset successfully loaded: '{self.location}', "
-            f"{round(time.perf_counter()-start_time, 2)}s"
-        )
-        return dataset
-
-    def reload(self) -> None:
-        """Reload dataset.
-
-        After a write has been performed, a reload of the dataset is required to reflect
-        any newly added records.
-        """
-        self.dataset = self.load_dataset()
-
-    @property
-    def row_count(self) -> int:
-        """Get row count from loaded dataset."""
-        if not self.dataset:
-            raise DatasetNotLoadedError
-        return self.dataset.count_rows()
 
     def write(
         self,

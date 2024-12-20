@@ -3,7 +3,7 @@
 from timdex_dataset_api.dataset import TIMDEXDataset
 from timdex_dataset_api.record import DatasetRecord
 
-__version__ = "0.3.0"
+__version__ = "0.4.0"
 
 __all__ = [
     "DatasetRecord",

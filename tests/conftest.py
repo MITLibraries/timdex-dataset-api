@@ -5,7 +5,10 @@
 
 import pytest
 
-from tests.utils import generate_sample_records
+from tests.utils import (
+    generate_sample_records,
+    generate_sample_records_with_simulated_partitions,
+)
 from timdex_dataset_api import TIMDEXDataset
 
 
@@ -19,19 +22,35 @@ def _test_env(monkeypatch):
 
 
 @pytest.fixture
-def local_dataset_location():
-    return "tests/fixtures/local_datasets/dataset"
+def local_dataset_location(tmp_path):
+    return str(tmp_path / "local_dataset/")
 
 
 @pytest.fixture
 def local_dataset(local_dataset_location):
-    return TIMDEXDataset.load(local_dataset_location)
+    timdex_dataset = TIMDEXDataset(local_dataset_location)
+    timdex_dataset.write(
+        generate_sample_records_with_simulated_partitions(num_records=5_000)
+    )
+    timdex_dataset.load()
+    return timdex_dataset
 
 
 @pytest.fixture
-def new_dataset(tmp_path) -> TIMDEXDataset:
-    location = str(tmp_path / "new_dataset")
-    return TIMDEXDataset(location=location)
+def new_local_dataset(tmp_path) -> TIMDEXDataset:
+    return TIMDEXDataset(location=str(tmp_path / "new_local_dataset/"))
+
+
+@pytest.fixture
+def fixed_local_dataset(tmp_path) -> TIMDEXDataset:
+    """Local dataset with a fixed set of configurations.
+
+    This fixture is required to perform unit tests for TIMDEXDataset.filter
+    method.
+    """
+    timdex_dataset = TIMDEXDataset(str(tmp_path / "fixed_local_dataset/"))
+    timdex_dataset.write(generate_sample_records(num_records=5_000, run_id="abc123"))
+    return timdex_dataset
 
 
 @pytest.fixture
