@@ -27,20 +27,20 @@
         },
         "boto3": {
             "hashes": [
-                "sha256:9f9bf72d92f7fdd546b974ffa45fa6715b9af7f5c00463e9d0f6ef9c95efe0c2",
-                "sha256:c94fc8023caf952f8740a48fc400521bba167f883cfa547d985c05fda7223f7a"
+                "sha256:d61476fdd5a5388503b72c897083310d2329ce088593c4332b571a860be5d155",
+                "sha256:ed59fb4883da167464a5dfbc96e76d571db75e1a7a27d8e7b790c3008b02fcc7"
             ],
             "index": "pypi",
             "markers": "python_version >= '3.8'",
-            "version": "==1.35.84"
+            "version": "==1.35.86"
         },
         "botocore": {
             "hashes": [
-                "sha256:b4dc2ac7f54ba959429e1debbd6c7c2fb2349baa1cd63803f0682f0773dbd077",
-                "sha256:f86754882e04683e2e99a6a23377d0dd7f1fc2b2242844b2381dbe4dcd639301"
+                "sha256:77cb4b445e4f424f956c68c688bd3ad527f4d214d51d67ffc8e245f4476d7de0",
+                "sha256:951e944eb30284b4593d4da98f70f7b5292ea237e4de0c5a2852946a549b8347"
             ],
             "markers": "python_version >= '3.8'",
-            "version": "==1.35.84"
+            "version": "==1.35.86"
         },
         "duckdb": {
             "hashes": [
