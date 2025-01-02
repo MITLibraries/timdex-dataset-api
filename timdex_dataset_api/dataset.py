@@ -10,6 +10,7 @@ from functools import reduce
 from typing import TYPE_CHECKING, TypedDict, Unpack
 
 import boto3
+import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pyarrow.dataset as ds
@@ -388,3 +389,82 @@ class TIMDEXDataset:
             f"total rows: {total_rows}, "
             f"total size: {total_size}"
         )
+
+    def read_batches_iter(
+        self,
+        columns: list[str] | None = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **filters: Unpack[DatasetFilters],
+    ) -> Iterator[pa.RecordBatch]:
+        """Yield pyarrow.RecordBatches from the dataset.
+
+        While batch_size will limit the max rows per batch, filtering may result in some
+        batches have less than this limit.
+
+        Args:
+            - columns: list[str], list of columns to return from the dataset
+            - batch_size: int, max number of rows to yield per batch
+            - filter_kwargs: pairs of column:value to filter the dataset
+        """
+        if not self.dataset:
+            raise DatasetNotLoadedError(
+                "Dataset is not loaded. Please call the `load` method first."
+            )
+        dataset = self._get_filtered_dataset(**filters)
+        for batch in dataset.to_batches(columns=columns, batch_size=batch_size):
+            if len(batch) > 0:
+                yield batch
+
+    def read_dataframes_iter(
+        self,
+        columns: list[str] | None = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **filters: Unpack[DatasetFilters],
+    ) -> Iterator[pd.DataFrame]:
+        """Yield record batches as Pandas DataFrames from the dataset.
+
+        Args: see self.read_batches_iter()
+        """
+        for record_batch in self.read_batches_iter(
+            columns=columns, batch_size=batch_size, **filters
+        ):
+            yield record_batch.to_pandas()
+
+    def read_dataframe(
+        self,
+        columns: list[str] | None = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **filters: Unpack[DatasetFilters],
+    ) -> pd.DataFrame | None:
+        """Yield record batches as Pandas DataFrames and concatenate to single dataframe.
+
+        WARNING: this will pull all records from currently filtered dataset into memory.
+
+        If no batches are found based on filtered dataset, None is returned.
+
+        Args: see self.read_batches_iter()
+        """
+        df_batches = [
+            record_batch.to_pandas()
+            for record_batch in self.read_batches_iter(
+                columns=columns, batch_size=batch_size, **filters
+            )
+        ]
+        if not df_batches:
+            return None
+        return pd.concat(df_batches)
+
+    def read_dicts_iter(
+        self,
+        columns: list[str] | None = None,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **filters: Unpack[DatasetFilters],
+    ) -> Iterator[dict]:
+        """Yield individual record rows as dictionaries from the dataset.
+
+        Args: see self.read_batches_iter()
+        """
+        for record_batch in self.read_batches_iter(
+            columns=columns, batch_size=batch_size, **filters
+        ):
+            yield from record_batch.to_pylist()
