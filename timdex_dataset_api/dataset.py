@@ -7,7 +7,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, date, datetime
 from functools import reduce
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypedDict, Unpack
 
 import boto3
 import pyarrow as pa
@@ -45,18 +45,17 @@ TIMDEX_DATASET_PARTITION_COLUMNS = [
     "day",
 ]
 
-# order must match assignment in TIMDEXDataset._get_filtered_dataset
-TIMDEX_DATASET_FILTER_COLUMNS = (
-    "timdex_record_id",
-    "source",
-    "run_date",
-    "run_type",
-    "run_id",
-    "action",
-    "year",
-    "month",
-    "day",
-)
+
+class DatasetFilters(TypedDict, total=False):
+    timdex_record_id: str | None
+    source: str | None
+    run_date: str | date | None
+    run_type: str | None
+    run_id: str | None
+    action: str | None
+    year: str | None
+    month: str | None
+    day: str | None
 
 
 DEFAULT_BATCH_SIZE = 1_000
@@ -93,21 +92,11 @@ class TIMDEXDataset:
 
     def load(
         self,
-        *,
-        timdex_record_id: str | None = None,
-        source: str | None = None,
-        run_date: str | date | None = None,
-        run_type: str | None = None,
-        run_id: str | None = None,
-        action: str | None = None,
-        year: str | None = None,
-        month: str | None = None,
-        day: str | None = None,
+        **filters: Unpack[DatasetFilters],
     ) -> None:
-        """Lazy load a pyarrow.dataset.Dataset to a TIMDEXDataset.
+        """Lazy load a pyarrow.dataset.Dataset and set to self.dataset.
 
-        This method sets a pyarrow.dataset.Dataset to the TIMDEXDataset.dataset
-        attribute. Loading comprises of two main steps:
+        Loading is comprised of two main steps:
 
         - load: Lazily load full dataset. PyArrow will "discover" full dataset.
             Note: This step may take a couple of seconds but leans on PyArrow's
@@ -120,31 +109,13 @@ class TIMDEXDataset:
         raised when reading or writing data.
 
         Args:
-            All args are optional and must be passed in as keyword args.
-
-            Partition columns:
-                - run_date (str | date | None, optional)
-                - year (str | None, optional)
-                - month (str | None, optional)
-                - day (str | None, optional)
-
-                If 'run_date' is provided, partition filters are derived by parsing
-                a datetime.date object from the 'run_date' value and extracting
-                ymd values to use in filter expression.
-
-            Non-partition columns
-                - timdex_record_id (str | None, optional)
-                - source (str | None, optional)
-                - run_type (str | None, optional)
-                - run_id (str | None, optional)
-                - action (str | None, optional)
-
-                Any values specified for each column will be used to filter
-                the dataset to rows matching column-value pairs.
+            - filters: kwargs typed via DatasetFilters TypedDict
+                - Filters passed directly in method call, e.g. source="alma",
+                 run_date="2024-12-20", etc., but are typed according to DatasetFilters.
         """
         start_time = time.perf_counter()
 
-        # lazy load full dataset
+        # load dataset
         self.dataset = ds.dataset(
             self.source,
             schema=self.schema,
@@ -154,17 +125,7 @@ class TIMDEXDataset:
         )
 
         # filter dataset
-        self.dataset = self._get_filtered_dataset(
-            timdex_record_id=timdex_record_id,
-            source=source,
-            run_date=run_date,
-            run_type=run_type,
-            run_id=run_id,
-            action=action,
-            year=year,
-            month=month,
-            day=day,
-        )
+        self.dataset = self._get_filtered_dataset(**filters)
 
         logger.info(
             f"Dataset successfully loaded: '{self.location}', "
@@ -173,41 +134,18 @@ class TIMDEXDataset:
 
     def _get_filtered_dataset(
         self,
-        *,
-        timdex_record_id: str | None = None,
-        source: str | None = None,
-        run_date: str | date | None = None,
-        run_type: str | None = None,
-        run_id: str | None = None,
-        action: str | None = None,
-        year: str | None = None,
-        month: str | None = None,
-        day: str | None = None,
+        **filters: Unpack[DatasetFilters],
     ) -> ds.Dataset:
-        """Lazy filter a pyarrow.dataset.Dataset on a TIMDEXDataset.
+        """Lazy filter self.dataset and return a new pyarrow Dataset object.
 
         This method will construct a single pyarrow.compute.Expression
         that is combined from individual equality comparison predicates
         using the provided filters.
 
         Args:
-            All args are optional and must be passed in as keyword args.
-
-            Run date columns
-                - run_date (str | date | None, optional)
-                - year (str | None, optional)
-                - month (str | None, optional)
-                - day (str | None, optional)
-
-            If 'run_date' is provided, the 'year', 'month', and 'day' values
-            are parsed from 'run_date'.
-
-            Other columns:
-                - timdex_record_id (str | None, optional)
-                - source (str | None, optional)
-                - run_type (str | None, optional)
-                - run_id (str | None, optional)
-                - action (str | None, optional)
+            - filters: kwargs typed via DatasetFilters TypedDict
+                - Filters passed directly in method call, e.g. source="alma",
+                 run_date="2024-12-20", etc., but are typed according to DatasetFilters.
 
         Raises:
             DatasetNotLoadedError: Raised if `self.dataset` is None.
@@ -222,32 +160,13 @@ class TIMDEXDataset:
         if not self.dataset:
             raise DatasetNotLoadedError
 
-        # instantiate filters dict
-        filters_dict = dict(
-            zip(
-                TIMDEX_DATASET_FILTER_COLUMNS,
-                [
-                    timdex_record_id,
-                    source,
-                    run_date,
-                    run_type,
-                    run_id,
-                    action,
-                    year,
-                    month,
-                    day,
-                ],
-                strict=False,
-            ),
-        )
-
-        # get filters for partition columns ('run_date' or 'run_date' components)
-        if run_date:
-            filters_dict.update(self._parse_date_filters(run_date))
+        # if run_date provided, derive year, month, and day partition filters and set
+        if filters.get("run_date"):
+            filters.update(self._parse_date_filters(filters["run_date"]))
 
         # create filter expressions for element-wise equality comparisons
         expressions = []
-        for field, value in filters_dict.items():
+        for field, value in filters.items():
             if value:
                 expressions.append(pc.equal(pc.field(field), value))
 
@@ -264,7 +183,7 @@ class TIMDEXDataset:
 
         return self.dataset.filter(combined_expressions)
 
-    def _parse_date_filters(self, run_date: str | date | None) -> dict:
+    def _parse_date_filters(self, run_date: str | date | None) -> DatasetFilters:
         """Parse date filters from 'run_date'.
 
         Args:
@@ -278,7 +197,7 @@ class TIMDEXDataset:
                 from a provided 'run_date' str.
 
         Returns:
-            dict: 'run_date' filters.
+            DatasetFilters[dict]: values for run_date, year, month, and day
         """
         if isinstance(run_date, str):
             run_date_obj = strict_date_parse(run_date)
