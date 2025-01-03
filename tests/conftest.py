@@ -49,7 +49,23 @@ def fixed_local_dataset(tmp_path) -> TIMDEXDataset:
     method.
     """
     timdex_dataset = TIMDEXDataset(str(tmp_path / "fixed_local_dataset/"))
-    timdex_dataset.write(generate_sample_records(num_records=5_000, run_id="abc123"))
+    for source, run_id in [
+        ("alma", "abc123"),
+        ("dspace", "def456"),
+        ("aspace", "ghi789"),
+        ("libguides", "jkl123"),
+        ("gismit", "mno456"),
+    ]:
+        timdex_dataset.write(
+            generate_sample_records(
+                num_records=1_000,
+                timdex_record_id_prefix=source,
+                source=source,
+                run_date="2024-12-01",
+                run_id=run_id,
+            )
+        )
+    timdex_dataset.load()
     return timdex_dataset
 
 
