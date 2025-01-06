@@ -1,6 +1,7 @@
 """timdex_dataset_api/dataset.py"""
 
 import itertools
+import json
 import operator
 import time
 import uuid
@@ -468,3 +469,19 @@ class TIMDEXDataset:
             columns=columns, batch_size=batch_size, **filters
         ):
             yield from record_batch.to_pylist()
+
+    def read_transformed_records_iter(
+        self,
+        batch_size: int = DEFAULT_BATCH_SIZE,
+        **filters: Unpack[DatasetFilters],
+    ) -> Iterator[dict]:
+        """Yield individual transformed records as dictionaries from the dataset.
+
+        If 'transformed_record' is None (i.e., action="skip"|"error"), the yield
+        statement will not be executed for the row.
+        """
+        for record_dict in self.read_dicts_iter(
+            columns=["transformed_record"], batch_size=batch_size, **filters
+        ):
+            if transformed_record := record_dict["transformed_record"]:
+                yield json.loads(transformed_record)

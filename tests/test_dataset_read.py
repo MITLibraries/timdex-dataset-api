@@ -89,3 +89,10 @@ def test_read_dicts_filter_to_none_stopiteration_immediately(fixed_local_dataset
     batches = fixed_local_dataset.read_dicts_iter(source="not-gonna-find-me")
     with pytest.raises(StopIteration):
         next(batches)
+
+
+def test_read_transformed_records_yields_parsed_dictionary(fixed_local_dataset):
+    batches = fixed_local_dataset.read_transformed_records_iter()
+    transformed_record = next(batches)
+    assert isinstance(transformed_record, dict)
+    assert transformed_record == {"title": ["Hello World."]}
