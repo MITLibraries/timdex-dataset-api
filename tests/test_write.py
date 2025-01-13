@@ -45,7 +45,7 @@ def test_dataset_write_record_batches_uses_batch_size(
     total_records = 101
     batch_size = 50
     batches = list(
-        new_local_dataset.get_dataset_record_batches(
+        new_local_dataset.create_record_batches(
             sample_records_iter(total_records), batch_size=batch_size
         )
     )

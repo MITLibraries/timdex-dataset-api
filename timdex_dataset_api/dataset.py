@@ -316,7 +316,7 @@ class TIMDEXDataset:
                 "Dataset location must be the root of a single dataset for writing"
             )
 
-        record_batches_iter = self.get_dataset_record_batches(
+        record_batches_iter = self.create_record_batches(
             records_iter,
             batch_size=batch_size,
         )
@@ -341,7 +341,7 @@ class TIMDEXDataset:
         self.log_write_statistics(start_time)
         return self._written_files  # type: ignore[return-value]
 
-    def get_dataset_record_batches(
+    def create_record_batches(
         self,
         records_iter: Iterator["DatasetRecord"],
         *,
@@ -360,14 +360,11 @@ class TIMDEXDataset:
                 group size in final parquet files
         """
         for i, record_batch in enumerate(itertools.batched(records_iter, batch_size)):
-            batch_start_time = time.perf_counter()
             batch = pa.RecordBatch.from_pylist(
                 [record.to_dict() for record in record_batch]
             )
-            logger.debug(
-                f"Batch {i + 1} yielded for writing, "
-                f"elapsed: {round(time.perf_counter()-batch_start_time, 6)}s"
-            )
+            message = f"Yielding batch {i+1} for dataset writing."
+            logger.debug(message)
             yield batch
 
     def log_write_statistics(self, start_time: float) -> None:
