@@ -4,19 +4,9 @@ import pandas as pd
 import pyarrow as pa
 import pytest
 
-DATASET_COLUMNS_SET = {
-    "timdex_record_id",
-    "source_record",
-    "transformed_record",
-    "source",
-    "run_date",
-    "run_type",
-    "run_id",
-    "action",
-    "year",
-    "month",
-    "day",
-}
+from timdex_dataset_api.dataset import TIMDEX_DATASET_SCHEMA
+
+DATASET_COLUMNS_SET = set(TIMDEX_DATASET_SCHEMA.names)
 
 
 def test_read_batches_yields_pyarrow_record_batches(fixed_local_dataset):
