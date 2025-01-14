@@ -363,8 +363,7 @@ class TIMDEXDataset:
             batch = pa.RecordBatch.from_pylist(
                 [record.to_dict() for record in record_batch]
             )
-            message = f"Yielding batch {i+1} for dataset writing."
-            logger.debug(message)
+            logger.debug(f"Yielding batch {i+1} for dataset writing.")
             yield batch
 
     def log_write_statistics(self, start_time: float) -> None:

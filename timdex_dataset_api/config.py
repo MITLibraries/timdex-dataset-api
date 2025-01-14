@@ -14,10 +14,9 @@ def configure_logger(name: str) -> logging.Logger:
     logger = logging.getLogger(name)
 
     # set logger level if env var 'TDA_LOG_LEVEL' is set
-    log_level = os.getenv("TDA_LOG_LEVEL")
-    if log_level:
+    if log_level := os.getenv("TDA_LOG_LEVEL"):
         log_level = log_level.strip().upper()
-        if log_level not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+        if log_level not in logging.getLevelNamesMapping():
             raise ValueError(f"Invalid log level: '{log_level}'")
         logger.setLevel(getattr(logging, log_level))
 
