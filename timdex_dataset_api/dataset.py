@@ -33,8 +33,9 @@ TIMDEX_DATASET_SCHEMA = pa.schema(
         pa.field("source", pa.string()),
         pa.field("run_date", pa.date32()),
         pa.field("run_type", pa.string()),
-        pa.field("run_id", pa.string()),
         pa.field("action", pa.string()),
+        pa.field("run_id", pa.string()),
+        pa.field("run_record_offset", pa.int32()),
         pa.field("year", pa.string()),
         pa.field("month", pa.string()),
         pa.field("day", pa.string()),
@@ -53,8 +54,9 @@ class DatasetFilters(TypedDict, total=False):
     source: str | None
     run_date: str | date | None
     run_type: str | None
-    run_id: str | None
     action: str | None
+    run_id: str | None
+    run_record_offset: int | None
     year: str | None
     month: str | None
     day: str | None

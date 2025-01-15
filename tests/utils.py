@@ -32,6 +32,7 @@ def generate_sample_records(
             run_type=run_type,
             action=action,
             run_id=run_id,
+            run_record_offset=x,
         )
 
 

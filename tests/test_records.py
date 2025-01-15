@@ -16,6 +16,7 @@ def test_dataset_record_init_with_valid_run_date_parses_year_month_day():
         "run_type": "full",
         "action": "index",
         "run_id": "000-111-aaa-bbb",
+        "run_record_offset": 0,
     }
     record = DatasetRecord(**values)
 
@@ -37,6 +38,7 @@ def test_dataset_record_init_with_invalid_run_date_raise_error():
         "run_type": "full",
         "action": "index",
         "run_id": "000-111-aaa-bbb",
+        "run_record_offset": 0,
     }
 
     with pytest.raises(
@@ -55,6 +57,7 @@ def test_dataset_record_serialization():
         "run_type": "full",
         "action": "index",
         "run_id": "abc123",
+        "run_record_offset": 0,
     }
     dataset_record = DatasetRecord(**values)
 
@@ -67,6 +70,7 @@ def test_dataset_record_serialization():
         "run_type": "full",
         "action": "index",
         "run_id": "abc123",
+        "run_record_offset": 0,
         "year": "2024",
         "month": "12",
         "day": "01",
