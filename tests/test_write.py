@@ -1,8 +1,6 @@
 # ruff: noqa: S105, S106, SLF001, PLR2004, PD901, D209, D205
 import math
 import os
-import re
-from datetime import date
 from unittest.mock import patch
 
 import pyarrow.dataset as ds
@@ -14,74 +12,6 @@ from timdex_dataset_api.dataset import (
     TIMDEX_DATASET_SCHEMA,
     TIMDEXDataset,
 )
-from timdex_dataset_api.record import DatasetRecord
-
-
-def test_dataset_record_init():
-    values = {
-        "timdex_record_id": "alma:123",
-        "source_record": b"<record><title>Hello World.</title></record>",
-        "transformed_record": b"""{"title":["Hello World."]}""",
-        "source": "libguides",
-        "run_date": "2024-12-01",
-        "run_type": "full",
-        "action": "index",
-        "run_id": "000-111-aaa-bbb",
-    }
-    record = DatasetRecord(**values)
-
-    assert record
-    assert (record.year, record.month, record.day) == (
-        "2024",
-        "12",
-        "01",
-    )
-
-
-def test_dataset_record_init_with_invalid_run_date_raise_error():
-    values = {
-        "timdex_record_id": "alma:123",
-        "source_record": b"<record><title>Hello World.</title></record>",
-        "transformed_record": b"""{"title":["Hello World."]}""",
-        "source": "libguides",
-        "run_date": "-12-01",
-        "run_type": "full",
-        "action": "index",
-        "run_id": "000-111-aaa-bbb",
-    }
-
-    with pytest.raises(
-        ValueError, match=re.escape("time data '-12-01' does not match format '%Y-%m-%d'")
-    ):
-        DatasetRecord(**values)
-
-
-def test_dataset_record_serialization():
-    values = {
-        "timdex_record_id": "alma:123",
-        "source_record": b"<record><title>Hello World.</title></record>",
-        "transformed_record": b"""{"title":["Hello World."]}""",
-        "source": "libguides",
-        "run_date": "2024-12-01",
-        "run_type": "full",
-        "action": "index",
-        "run_id": "abc123",
-    }
-    dataset_record = DatasetRecord(**values)
-
-    assert dataset_record.to_dict() == {
-        "timdex_record_id": "alma:123",
-        "source_record": b"<record><title>Hello World.</title></record>",
-        "transformed_record": b"""{"title":["Hello World."]}""",
-        "source": "libguides",
-        "run_date": date(2024, 12, 1),
-        "run_type": "full",
-        "action": "index",
-        "run_id": "abc123",
-        "year": "2024",
-        "month": "12",
-        "day": "01",
-    }
 
 
 def test_dataset_write_records_to_new_local_dataset(
@@ -115,7 +45,7 @@ def test_dataset_write_record_batches_uses_batch_size(
     total_records = 101
     batch_size = 50
     batches = list(
-        new_local_dataset.get_dataset_record_batches(
+        new_local_dataset.create_record_batches(
             sample_records_iter(total_records), batch_size=batch_size
         )
     )
