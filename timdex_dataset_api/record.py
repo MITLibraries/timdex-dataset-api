@@ -18,15 +18,15 @@ class DatasetRecord:
     writing.
     """
 
-    # primary columns
     timdex_record_id: str = field()
     source_record: bytes = field()
     transformed_record: bytes = field()
     source: str = field()
     run_date: date = field(converter=strict_date_parse)
     run_type: str = field()
-    run_id: str = field()
     action: str = field()
+    run_id: str = field()
+    run_record_offset: int = field(default=None)
 
     @property
     def year(self) -> str:
