@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, TypedDict, Unpack
 import boto3
 import pandas as pd
 import pyarrow as pa
-import pyarrow.compute as pc
 import pyarrow.dataset as ds
 from pyarrow import fs
 
@@ -171,8 +170,10 @@ class TIMDEXDataset:
         # create filter expressions for element-wise equality comparisons
         expressions = []
         for field, value in filters.items():
-            if value:
-                expressions.append(pc.equal(pc.field(field), value))
+            if isinstance(value, list):
+                expressions.append(ds.field(field).isin(value))
+            else:
+                expressions.append(ds.field(field) == value)
 
         # if filter expressions not found, return original dataset
         if not expressions:

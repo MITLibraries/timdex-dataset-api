@@ -115,6 +115,22 @@ def test_dataset_load_with_multi_nonpartition_filters_success(fixed_local_datase
     assert fixed_local_dataset.row_count == 1
 
 
+def test_dataset_get_filtered_dataset_with_single_nonpartition_success(
+    fixed_local_dataset,
+):
+    fixed_local_dataset.load()  # initial load dataset, no filters passed
+
+    filtered_local_dataset = fixed_local_dataset._get_filtered_dataset(
+        run_id="abc123",
+    )
+    filtered_local_df = filtered_local_dataset.to_table().to_pandas()
+
+    # fixed_local_dataset consists of single 'run_id' value
+    # therefore, filtered_local_dataset includes all records
+    assert len(filtered_local_df) == filtered_local_dataset.count_rows()
+    assert filtered_local_df["run_id"].unique() == ["abc123"]
+
+
 def test_dataset_get_filtered_dataset_with_multi_nonpartition_filters_success(
     fixed_local_dataset,
 ):
@@ -133,20 +149,17 @@ def test_dataset_get_filtered_dataset_with_multi_nonpartition_filters_success(
     assert filtered_local_df["timdex_record_id"].iloc[0] == "alma:0"
 
 
-def test_dataset_get_filtered_dataset_with_single_nonpartition_success(
+def test_dataset_get_filtered_dataset_with_or_nonpartition_filters_success(
     fixed_local_dataset,
 ):
-    fixed_local_dataset.load()  # initial load dataset, no filters passed
+    fixed_local_dataset.load()
 
     filtered_local_dataset = fixed_local_dataset._get_filtered_dataset(
-        run_id="abc123",
+        timdex_record_id=["alma:0", "alma:1"]
     )
     filtered_local_df = filtered_local_dataset.to_table().to_pandas()
-
-    # fixed_local_dataset consists of single 'run_id' value
-    # therefore, filtered_local_dataset includes all records
-    assert len(filtered_local_df) == filtered_local_dataset.count_rows()
-    assert filtered_local_df["run_id"].unique() == ["abc123"]
+    assert len(filtered_local_df) == 2  # noqa: PLR2004
+    assert filtered_local_df["timdex_record_id"].tolist() == ["alma:0", "alma:1"]
 
 
 def test_dataset_get_filtered_dataset_with_run_date_str_successs(fixed_local_dataset):
