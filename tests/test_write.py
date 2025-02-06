@@ -8,7 +8,6 @@ import pytest
 
 from tests.utils import generate_sample_records
 from timdex_dataset_api.dataset import (
-    MAX_ROWS_PER_FILE,
     TIMDEX_DATASET_SCHEMA,
     TIMDEXDataset,
 )
@@ -28,6 +27,7 @@ def test_dataset_write_records_to_new_local_dataset(
 def test_dataset_write_default_max_rows_per_file(new_local_dataset, sample_records_iter):
     """Default is 100k rows per file, therefore writing 200,033 records should result in
     3 files (x2 @ 100k rows, x1 @ 33 rows)."""
+    default_max_rows_per_file = new_local_dataset.config.max_rows_per_file
     total_records = 200_033
 
     new_local_dataset.write(sample_records_iter(total_records))
@@ -35,7 +35,7 @@ def test_dataset_write_default_max_rows_per_file(new_local_dataset, sample_recor
 
     assert new_local_dataset.row_count == total_records
     assert len(new_local_dataset.dataset.files) == math.ceil(
-        total_records / MAX_ROWS_PER_FILE
+        total_records / default_max_rows_per_file
     )
 
 
@@ -43,13 +43,13 @@ def test_dataset_write_record_batches_uses_batch_size(
     new_local_dataset, sample_records_iter
 ):
     total_records = 101
-    batch_size = 50
+    new_local_dataset.config.write_batch_size = 50
     batches = list(
-        new_local_dataset.create_record_batches(
-            sample_records_iter(total_records), batch_size=batch_size
-        )
+        new_local_dataset.create_record_batches(sample_records_iter(total_records))
     )
-    assert len(batches) == math.ceil(total_records / batch_size)
+    assert len(batches) == math.ceil(
+        total_records / new_local_dataset.config.write_batch_size
+    )
 
 
 def test_dataset_write_to_multiple_locations_raise_error(sample_records_iter):

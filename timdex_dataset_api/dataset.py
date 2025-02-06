@@ -3,9 +3,11 @@
 import itertools
 import json
 import operator
+import os
 import time
 import uuid
 from collections.abc import Iterator
+from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from functools import reduce
 from typing import TYPE_CHECKING, TypedDict, Unpack
@@ -61,20 +63,48 @@ class DatasetFilters(TypedDict, total=False):
     day: str | None
 
 
-DEFAULT_BATCH_SIZE = 1_000
-MAX_ROWS_PER_GROUP = DEFAULT_BATCH_SIZE
-MAX_ROWS_PER_FILE = 100_000
-DEFAULT_BATCH_READ_AHEAD = 0
-DEFAULT_FRAGMENT_READ_AHEAD = 0
+@dataclass
+class TIMDEXDatasetConfig:
+    """Configurations for dataset operations.
 
+    - read_batch_size: row size of batches read, affecting memory consumption
+    - write_batch_size: row size of batches written, directly affecting row group size in
+        final parquet files
+    - max_rows_per_group: max number of rows per row group in a parquet file
+    - max_rows_per_file: max number of rows in a single parquet file
+    - batch_read_ahead: number of batches to optimistically read ahead when batch reading
+        from a dataset; pyarrow default is 16
+    - fragment_read_ahead: number of fragments to optimistically read ahead when batch
+        reaching from a dataset; pyarrow default is 4
+    """
 
-def strict_date_parse(date_string: str) -> date:
-    return datetime.strptime(date_string, "%Y-%m-%d").astimezone(UTC).date()
+    read_batch_size: int = field(
+        default_factory=lambda: int(os.getenv("TDA_READ_BATCH_SIZE", "1_000"))
+    )
+    write_batch_size: int = field(
+        default_factory=lambda: int(os.getenv("TDA_WRITE_BATCH_SIZE", "1_000"))
+    )
+    max_rows_per_group: int = field(
+        default_factory=lambda: int(os.getenv("TDA_MAX_ROWS_PER_GROUP", "1_000"))
+    )
+    max_rows_per_file: int = field(
+        default_factory=lambda: int(os.getenv("TDA_MAX_ROWS_PER_FILE", "100_000"))
+    )
+    batch_read_ahead: int = field(
+        default_factory=lambda: int(os.getenv("TDA_BATCH_READ_AHEAD", "0"))
+    )
+    fragment_read_ahead: int = field(
+        default_factory=lambda: int(os.getenv("TDA_FRAGMENT_READ_AHEAD", "0"))
+    )
 
 
 class TIMDEXDataset:
 
-    def __init__(self, location: str | list[str]):
+    def __init__(
+        self,
+        location: str | list[str],
+        config: TIMDEXDatasetConfig | None = None,
+    ):
         """Initialize TIMDEXDataset object.
 
         Args:
@@ -82,6 +112,8 @@ class TIMDEXDataset:
                 a parquet dataset. For partitioned datasets, set to the base directory.
         """
         self.location = location
+        self.config = config or TIMDEXDatasetConfig()
+
         self.filesystem, self.source = self.parse_location(self.location)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
@@ -171,7 +203,7 @@ class TIMDEXDataset:
 
         # create filter expressions for element-wise equality comparisons
         expressions = []
-        for field, value in filters.items():
+        for field, value in filters.items():  # noqa: F402
             if isinstance(value, list):
                 expressions.append(ds.field(field).isin(value))
             else:
@@ -207,7 +239,7 @@ class TIMDEXDataset:
             DatasetFilters[dict]: values for run_date, year, month, and day
         """
         if isinstance(run_date, str):
-            run_date_obj = strict_date_parse(run_date)
+            run_date_obj = datetime.strptime(run_date, "%Y-%m-%d").astimezone(UTC).date()
         elif isinstance(run_date, date):
             run_date_obj = run_date
         else:
@@ -286,7 +318,6 @@ class TIMDEXDataset:
         self,
         records_iter: Iterator["DatasetRecord"],
         *,
-        batch_size: int = DEFAULT_BATCH_SIZE,
         use_threads: bool = True,
     ) -> list[ds.WrittenFile]:
         """Write records to the TIMDEX parquet dataset.
@@ -309,8 +340,6 @@ class TIMDEXDataset:
 
         Args:
             - records_iter: Iterator of DatasetRecord instances
-            - batch_size: size for batches to yield and write, directly affecting row
-                group size in final parquet files
             - use_threads: boolean if threads should be used for writing
         """
         start_time = time.perf_counter()
@@ -321,10 +350,7 @@ class TIMDEXDataset:
                 "Dataset location must be the root of a single dataset for writing"
             )
 
-        record_batches_iter = self.create_record_batches(
-            records_iter,
-            batch_size=batch_size,
-        )
+        record_batches_iter = self.create_record_batches(records_iter)
 
         ds.write_dataset(
             record_batches_iter,
@@ -335,8 +361,8 @@ class TIMDEXDataset:
             file_visitor=lambda written_file: self._written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
             max_open_files=500,
-            max_rows_per_file=MAX_ROWS_PER_FILE,
-            max_rows_per_group=MAX_ROWS_PER_GROUP,
+            max_rows_per_file=self.config.max_rows_per_file,
+            max_rows_per_group=self.config.max_rows_per_group,
             partitioning=self.partition_columns,
             partitioning_flavor="hive",
             schema=self.schema,
@@ -349,8 +375,6 @@ class TIMDEXDataset:
     def create_record_batches(
         self,
         records_iter: Iterator["DatasetRecord"],
-        *,
-        batch_size: int = DEFAULT_BATCH_SIZE,
     ) -> Iterator[pa.RecordBatch]:
         """Yield pyarrow.RecordBatches for writing.
 
@@ -361,10 +385,10 @@ class TIMDEXDataset:
 
         Args:
             - records_iter: Iterator of DatasetRecord instances
-            - batch_size: size for batches to yield and write, directly affecting row
-                group size in final parquet files
         """
-        for i, record_batch in enumerate(itertools.batched(records_iter, batch_size)):
+        for i, record_batch in enumerate(
+            itertools.batched(records_iter, self.config.write_batch_size)
+        ):
             batch = pa.RecordBatch.from_pylist(
                 [record.to_dict() for record in record_batch]
             )
@@ -395,9 +419,6 @@ class TIMDEXDataset:
     def read_batches_iter(
         self,
         columns: list[str] | None = None,
-        batch_size: int = DEFAULT_BATCH_SIZE,
-        batch_read_ahead: int = DEFAULT_BATCH_READ_AHEAD,
-        fragment_read_ahead: int = DEFAULT_FRAGMENT_READ_AHEAD,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[pa.RecordBatch]:
         """Yield pyarrow.RecordBatches from the dataset.
@@ -416,7 +437,7 @@ class TIMDEXDataset:
                 number will increase RAM usage but could also improve IO utilization.
                 Pyarrow default is 4, but this library defaults to 0 to prioritize memory
                 footprint.
-            - filter_kwargs: pairs of column:value to filter the dataset
+            - filters: pairs of column:value to filter the dataset
         """
         if not self.dataset:
             raise DatasetNotLoadedError(
@@ -425,9 +446,9 @@ class TIMDEXDataset:
         dataset = self._get_filtered_dataset(**filters)
         for batch in dataset.to_batches(
             columns=columns,
-            batch_size=batch_size,
-            batch_readahead=batch_read_ahead,
-            fragment_readahead=fragment_read_ahead,
+            batch_size=self.config.read_batch_size,
+            batch_readahead=self.config.batch_read_ahead,
+            fragment_readahead=self.config.fragment_read_ahead,
         ):
             if len(batch) > 0:
                 yield batch
@@ -435,9 +456,6 @@ class TIMDEXDataset:
     def read_dataframes_iter(
         self,
         columns: list[str] | None = None,
-        batch_size: int = DEFAULT_BATCH_SIZE,
-        batch_read_ahead: int = DEFAULT_BATCH_READ_AHEAD,
-        fragment_read_ahead: int = DEFAULT_FRAGMENT_READ_AHEAD,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[pd.DataFrame]:
         """Yield record batches as Pandas DataFrames from the dataset.
@@ -446,9 +464,6 @@ class TIMDEXDataset:
         """
         for record_batch in self.read_batches_iter(
             columns=columns,
-            batch_size=batch_size,
-            batch_read_ahead=batch_read_ahead,
-            fragment_read_ahead=fragment_read_ahead,
             **filters,
         ):
             yield record_batch.to_pandas()
@@ -456,9 +471,6 @@ class TIMDEXDataset:
     def read_dataframe(
         self,
         columns: list[str] | None = None,
-        batch_size: int = DEFAULT_BATCH_SIZE,
-        batch_read_ahead: int = DEFAULT_BATCH_READ_AHEAD,
-        fragment_read_ahead: int = DEFAULT_FRAGMENT_READ_AHEAD,
         **filters: Unpack[DatasetFilters],
     ) -> pd.DataFrame | None:
         """Yield record batches as Pandas DataFrames and concatenate to single dataframe.
@@ -473,9 +485,6 @@ class TIMDEXDataset:
             record_batch.to_pandas()
             for record_batch in self.read_batches_iter(
                 columns=columns,
-                batch_size=batch_size,
-                batch_read_ahead=batch_read_ahead,
-                fragment_read_ahead=fragment_read_ahead,
                 **filters,
             )
         ]
@@ -486,9 +495,6 @@ class TIMDEXDataset:
     def read_dicts_iter(
         self,
         columns: list[str] | None = None,
-        batch_size: int = DEFAULT_BATCH_SIZE,
-        batch_read_ahead: int = DEFAULT_BATCH_READ_AHEAD,
-        fragment_read_ahead: int = DEFAULT_FRAGMENT_READ_AHEAD,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[dict]:
         """Yield individual record rows as dictionaries from the dataset.
@@ -497,18 +503,12 @@ class TIMDEXDataset:
         """
         for record_batch in self.read_batches_iter(
             columns=columns,
-            batch_size=batch_size,
-            batch_read_ahead=batch_read_ahead,
-            fragment_read_ahead=fragment_read_ahead,
             **filters,
         ):
             yield from record_batch.to_pylist()
 
     def read_transformed_records_iter(
         self,
-        batch_size: int = DEFAULT_BATCH_SIZE,
-        batch_read_ahead: int = DEFAULT_BATCH_READ_AHEAD,
-        fragment_read_ahead: int = DEFAULT_FRAGMENT_READ_AHEAD,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[dict]:
         """Yield individual transformed records as dictionaries from the dataset.
@@ -520,9 +520,6 @@ class TIMDEXDataset:
         """
         for record_dict in self.read_dicts_iter(
             columns=["transformed_record"],
-            batch_size=batch_size,
-            batch_read_ahead=batch_read_ahead,
-            fragment_read_ahead=fragment_read_ahead,
             **filters,
         ):
             if transformed_record := record_dict["transformed_record"]:
