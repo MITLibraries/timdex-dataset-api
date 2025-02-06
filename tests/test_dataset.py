@@ -1,4 +1,4 @@
-# ruff: noqa: S105, S106, SLF001
+# ruff: noqa: S105, S106, SLF001, PLR2004
 import os
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -7,7 +7,11 @@ import pyarrow as pa
 import pytest
 from pyarrow import fs
 
-from timdex_dataset_api.dataset import DatasetNotLoadedError, TIMDEXDataset
+from timdex_dataset_api.dataset import (
+    DatasetNotLoadedError,
+    TIMDEXDataset,
+    TIMDEXDatasetConfig,
+)
 
 
 @pytest.mark.parametrize(
@@ -21,6 +25,24 @@ def test_dataset_init_success(location, expected_file_system, expected_source):
     timdex_dataset = TIMDEXDataset(location=location)
     assert isinstance(timdex_dataset.filesystem, expected_file_system)
     assert timdex_dataset.source == expected_source
+
+
+def test_dataset_init_env_vars_set_config(monkeypatch, local_dataset_location):
+    default_timdex_dataset = TIMDEXDataset(location=local_dataset_location)
+    default_read_batch_config = default_timdex_dataset.config.read_batch_size
+    assert default_read_batch_config == 1_000
+
+    monkeypatch.setenv("TDA_READ_BATCH_SIZE", "100_000")
+    env_var_timdex_dataset = TIMDEXDataset(location=local_dataset_location)
+    env_var_read_batch_config = env_var_timdex_dataset.config.read_batch_size
+    assert env_var_read_batch_config == 100_000
+
+
+def test_dataset_init_custom_config_object(monkeypatch, local_dataset_location):
+    config = TIMDEXDatasetConfig()
+    config.max_rows_per_file = 42
+    timdex_dataset = TIMDEXDataset(location=local_dataset_location, config=config)
+    assert timdex_dataset.config.max_rows_per_file == 42
 
 
 @patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
@@ -73,28 +95,28 @@ def test_dataset_load_without_filters_success(fixed_local_dataset):
     fixed_local_dataset.load()
 
     assert os.path.exists(fixed_local_dataset.location)
-    assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
+    assert fixed_local_dataset.row_count == 5_000
 
 
 def test_dataset_load_with_run_date_str_filters_success(fixed_local_dataset):
     fixed_local_dataset.load(run_date="2024-12-01")
 
     assert os.path.exists(fixed_local_dataset.location)
-    assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
+    assert fixed_local_dataset.row_count == 5_000
 
 
 def test_dataset_load_with_run_date_obj_filters_success(fixed_local_dataset):
     fixed_local_dataset.load(run_date=date(2024, 12, 1))
 
     assert os.path.exists(fixed_local_dataset.location)
-    assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
+    assert fixed_local_dataset.row_count == 5_000
 
 
 def test_dataset_load_with_ymd_filters_success(fixed_local_dataset):
     fixed_local_dataset.load(year="2024", month="12", day="01")
 
     assert os.path.exists(fixed_local_dataset.location)
-    assert fixed_local_dataset.row_count == 5_000  # noqa: PLR2004
+    assert fixed_local_dataset.row_count == 5_000
 
 
 def test_dataset_load_with_single_nonpartition_filters_success(fixed_local_dataset):
@@ -158,7 +180,7 @@ def test_dataset_get_filtered_dataset_with_or_nonpartition_filters_success(
         timdex_record_id=["alma:0", "alma:1"]
     )
     filtered_local_df = filtered_local_dataset.to_table().to_pandas()
-    assert len(filtered_local_df) == 2  # noqa: PLR2004
+    assert len(filtered_local_df) == 2
     assert filtered_local_df["timdex_record_id"].tolist() == ["alma:0", "alma:1"]
 
 
