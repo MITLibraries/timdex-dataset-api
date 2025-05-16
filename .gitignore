@@ -159,3 +159,5 @@ cython_debug/
 
 # VSCode
 .vscode
+
+output/
