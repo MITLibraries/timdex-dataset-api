@@ -2,7 +2,10 @@ import logging
 import os
 
 
-def configure_logger(name: str) -> logging.Logger:
+def configure_logger(
+    name: str,
+    warning_only_loggers: str | None = None,
+) -> logging.Logger:
     """Prepares a logger instance.
 
     If the env var TDA_LOG_LEVEL is set, the logging level will override the logging
@@ -20,4 +23,15 @@ def configure_logger(name: str) -> logging.Logger:
             raise ValueError(f"Invalid log level: '{log_level}'")
         logger.setLevel(getattr(logging, log_level))
 
+    warning_only_loggers = os.getenv("WARNING_ONLY_LOGGERS", warning_only_loggers)
+    if warning_only_loggers:
+        for warning_logger_name in warning_only_loggers.split(","):
+            logging.getLogger(warning_logger_name).setLevel(logging.WARNING)
+
     return logger
+
+
+def configure_dev_logger() -> logging.Logger:
+    """Invoke to setup DEBUG level console logging for development work."""
+    logging.basicConfig(level=logging.DEBUG)
+    return configure_logger(__name__)
