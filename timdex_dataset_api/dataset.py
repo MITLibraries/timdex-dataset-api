@@ -114,7 +114,7 @@ class TIMDEXDataset:
         self.location = location
         self.config = config or TIMDEXDatasetConfig()
 
-        self.filesystem, self.source = self.parse_location(self.location)
+        self.filesystem, self.paths = self.parse_location(self.location)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
@@ -126,6 +126,16 @@ class TIMDEXDataset:
         if not self.dataset:
             raise DatasetNotLoadedError
         return self.dataset.count_rows()
+
+    def _reload_dataset(self) -> None:
+        """Reload the pyarrow dataset from the current self.paths."""
+        self.dataset = ds.dataset(
+            self.paths,
+            schema=self.schema,
+            format="parquet",
+            partitioning="hive",
+            filesystem=self.filesystem,
+        )
 
     def load(
         self,
@@ -153,13 +163,7 @@ class TIMDEXDataset:
         start_time = time.perf_counter()
 
         # load dataset
-        self.dataset = ds.dataset(
-            self.source,
-            schema=self.schema,
-            format="parquet",
-            partitioning="hive",
-            filesystem=self.filesystem,
-        )
+        self._reload_dataset()
 
         # filter dataset
         self.dataset = self._get_filtered_dataset(**filters)
@@ -345,7 +349,7 @@ class TIMDEXDataset:
         start_time = time.perf_counter()
         self._written_files = []
 
-        if isinstance(self.source, list):
+        if isinstance(self.paths, list):
             raise TypeError(
                 "Dataset location must be the root of a single dataset for writing"
             )
@@ -354,7 +358,7 @@ class TIMDEXDataset:
 
         ds.write_dataset(
             record_batches_iter,
-            base_dir=self.source,
+            base_dir=self.paths,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
             existing_data_behavior="overwrite_or_ignore",
             filesystem=self.filesystem,
@@ -423,8 +427,9 @@ class TIMDEXDataset:
     ) -> Iterator[pa.RecordBatch]:
         """Yield pyarrow.RecordBatches from the dataset.
 
-        While batch_size will limit the max rows per batch, filtering may result in some
-        batches have less than this limit.
+        All read methods flow through this pyarrow record batch reading.  While batch_size
+        will limit the max rows per batch, filtering may result in some batches have less
+        than this limit.
 
         Args:
             - columns: list[str], list of columns to return from the dataset
@@ -490,7 +495,7 @@ class TIMDEXDataset:
         ]
         if not df_batches:
             return None
-        return pd.concat(df_batches)
+        return pd.concat(df_batches, ignore_index=True)
 
     def read_dicts_iter(
         self,
@@ -519,7 +524,7 @@ class TIMDEXDataset:
         Args: see self.read_batches_iter()
         """
         for record_dict in self.read_dicts_iter(
-            columns=["transformed_record"],
+            columns=["timdex_record_id", "transformed_record"],
             **filters,
         ):
             if transformed_record := record_dict["transformed_record"]:

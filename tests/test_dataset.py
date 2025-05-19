@@ -24,7 +24,7 @@ from timdex_dataset_api.dataset import (
 def test_dataset_init_success(location, expected_file_system, expected_source):
     timdex_dataset = TIMDEXDataset(location=location)
     assert isinstance(timdex_dataset.filesystem, expected_file_system)
-    assert timdex_dataset.source == expected_source
+    assert timdex_dataset.paths == expected_source
 
 
 def test_dataset_init_env_vars_set_config(monkeypatch, local_dataset_location):
