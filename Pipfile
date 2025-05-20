@@ -24,5 +24,7 @@ pyarrow-stubs = "*"
 pytest = "*"
 ruff = "*"
 setuptools = "*"
+pip-audit = "*"
+
 [requires]
 python_version = "3.12"
