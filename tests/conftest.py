@@ -120,7 +120,7 @@ def dataset_with_runs_location(tmp_path) -> str:
         ]
     )
 
-    # simulate ETL runs for 'alma'
+    # simulate ETL runs for 'dspace'
     run_params.extend(
         [
             (30, "dspace", "2024-12-02", "full", "index", "run-8"),
