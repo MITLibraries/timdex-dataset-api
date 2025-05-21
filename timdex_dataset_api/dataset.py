@@ -20,6 +20,7 @@ from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.exceptions import DatasetNotLoadedError
+from timdex_dataset_api.run import TIMDEXRunManager
 
 if TYPE_CHECKING:
     from timdex_dataset_api.record import DatasetRecord  # pragma: nocover
@@ -114,7 +115,7 @@ class TIMDEXDataset:
         self.location = location
         self.config = config or TIMDEXDatasetConfig()
 
-        self.filesystem, self.source = self.parse_location(self.location)
+        self.filesystem, self.paths = self.parse_location(self.location)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
@@ -129,6 +130,8 @@ class TIMDEXDataset:
 
     def load(
         self,
+        *,
+        current_records: bool = False,
         **filters: Unpack[DatasetFilters],
     ) -> None:
         """Lazy load a pyarrow.dataset.Dataset and set to self.dataset.
@@ -152,14 +155,23 @@ class TIMDEXDataset:
         """
         start_time = time.perf_counter()
 
-        # load dataset
-        self.dataset = ds.dataset(
-            self.source,
-            schema=self.schema,
-            format="parquet",
-            partitioning="hive",
-            filesystem=self.filesystem,
-        )
+        # reset paths from original location before load
+        _, self.paths = self.parse_location(self.location)
+
+        # perform initial load of full dataset
+        self._load_pyarrow_dataset()
+
+        # if current_records flag set, limit to parquet files associated with current runs
+        if current_records:
+            timdex_run_manager = TIMDEXRunManager(timdex_dataset=self)
+
+            # if filters.source is set, further limit to only this source
+            source = filters.get("source")
+            if source:
+                self.paths = timdex_run_manager.get_current_source_parquet_files(source)
+            else:
+                self.paths = timdex_run_manager.get_current_parquet_files()
+            self._load_pyarrow_dataset()
 
         # filter dataset
         self.dataset = self._get_filtered_dataset(**filters)
@@ -167,6 +179,16 @@ class TIMDEXDataset:
         logger.info(
             f"Dataset successfully loaded: '{self.location}', "
             f"{round(time.perf_counter()-start_time, 2)}s"
+        )
+
+    def _load_pyarrow_dataset(self) -> None:
+        """Load the pyarrow dataset per local filesystem and paths attributes."""
+        self.dataset = ds.dataset(
+            self.paths,
+            schema=self.schema,
+            format="parquet",
+            partitioning="hive",
+            filesystem=self.filesystem,
         )
 
     def _get_filtered_dataset(
@@ -345,7 +367,8 @@ class TIMDEXDataset:
         start_time = time.perf_counter()
         self._written_files = []
 
-        if isinstance(self.source, list):
+        dataset_filesystem, dataset_path = self.parse_location(self.location)
+        if isinstance(dataset_path, list):
             raise TypeError(
                 "Dataset location must be the root of a single dataset for writing"
             )
@@ -354,10 +377,10 @@ class TIMDEXDataset:
 
         ds.write_dataset(
             record_batches_iter,
-            base_dir=self.source,
+            base_dir=dataset_path,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
             existing_data_behavior="overwrite_or_ignore",
-            filesystem=self.filesystem,
+            filesystem=dataset_filesystem,
             file_visitor=lambda written_file: self._written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
             max_open_files=500,

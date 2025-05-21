@@ -56,14 +56,27 @@ def test_timdex_run_manager_get_runs_df(timdex_run_manager):
     assert runs_df.source.value_counts().to_dict() == {"alma": 7, "dspace": 7}
 
 
+def test_timdex_run_manager_get_all_current_run_parquet_files_success(
+    timdex_run_manager,
+):
+    ordered_parquet_files = timdex_run_manager.get_current_parquet_files()
+
+    # assert 12 parquet files, despite being 14 total for ALL sources
+    # this represents the last full run and all daily since
+    assert len(ordered_parquet_files) == 12
+
+    # assert sorted reverse chronologically
+    assert "year=2025/month=01/day=01" in ordered_parquet_files[-1]
+
+
 def test_timdex_run_manager_get_source_current_run_parquet_files_success(
     timdex_run_manager,
 ):
     ordered_parquet_files = timdex_run_manager.get_current_source_parquet_files("alma")
 
-    # assert 6 parquet files, despite being 8 total for alma
+    # assert 6 parquet files, despite being 8 total for 'alma' source
     # this represents the last full run and all daily since
-    assert len(ordered_parquet_files)
+    assert len(ordered_parquet_files) == 6
 
     # assert sorted reverse chronologically
     assert "year=2025/month=01/day=05" in ordered_parquet_files[0]
