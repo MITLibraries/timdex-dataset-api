@@ -2,6 +2,7 @@
 
 # ruff: noqa: D205, D209
 
+import os
 
 import pytest
 
@@ -10,6 +11,7 @@ from tests.utils import (
     generate_sample_records_with_simulated_partitions,
 )
 from timdex_dataset_api import TIMDEXDataset
+from timdex_dataset_api.dataset import TIMDEXDatasetConfig
 
 
 @pytest.fixture(autouse=True)
@@ -90,3 +92,58 @@ def sample_records_iter_without_partitions():
         )
 
     return _records_iter
+
+
+@pytest.fixture
+def dataset_with_runs_location(tmp_path) -> str:
+    """Fixture to simulate a dataset with multiple full and daily ETL runs."""
+    location = str(tmp_path / "dataset_with_runs")
+    os.mkdir(location)
+
+    timdex_dataset = TIMDEXDataset(
+        location, config=TIMDEXDatasetConfig(max_rows_per_group=75, max_rows_per_file=75)
+    )
+    timdex_dataset.load()
+
+    run_params = []
+
+    # simulate ETL runs for 'alma'
+    run_params.extend(
+        [
+            (40, "alma", "2024-12-01", "full", "index", "run-1"),
+            (20, "alma", "2024-12-15", "daily", "index", "run-2"),
+            (100, "alma", "2025-01-01", "full", "index", "run-3"),
+            (50, "alma", "2025-01-02", "daily", "index", "run-4"),
+            (25, "alma", "2025-01-03", "daily", "index", "run-5"),
+            (10, "alma", "2025-01-04", "daily", "delete", "run-6"),
+            (9, "alma", "2025-01-05", "daily", "index", "run-7"),
+        ]
+    )
+
+    # simulate ETL runs for 'dspace'
+    run_params.extend(
+        [
+            (30, "dspace", "2024-12-02", "full", "index", "run-8"),
+            (10, "dspace", "2024-12-16", "daily", "index", "run-9"),
+            (90, "dspace", "2025-02-01", "full", "index", "run-10"),
+            (40, "dspace", "2025-02-02", "daily", "index", "run-11"),
+            (15, "dspace", "2025-02-03", "daily", "index", "run-12"),
+            (5, "dspace", "2025-02-04", "daily", "delete", "run-13"),
+            (4, "dspace", "2025-02-05", "daily", "index", "run-14"),
+        ]
+    )
+
+    # write to dataset
+    for params in run_params:
+        num_records, source, run_date, run_type, action, run_id = params
+        records = generate_sample_records(
+            num_records,
+            source=source,
+            run_date=run_date,
+            run_type=run_type,
+            action=action,
+            run_id=run_id,
+        )
+        timdex_dataset.write(records)
+
+    return location
