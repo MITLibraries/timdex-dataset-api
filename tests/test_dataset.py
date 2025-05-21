@@ -339,3 +339,57 @@ def test_dataset_local_dataset_row_count_missing_dataset_raise_error(local_datas
     td = TIMDEXDataset(location="path/to/nowhere")
     with pytest.raises(DatasetNotLoadedError):
         _ = td.row_count
+
+
+def test_dataset_all_records_not_current_and_not_deduped(local_dataset_with_runs):
+    local_dataset_with_runs.load()
+    all_records_df = local_dataset_with_runs.read_dataframe()
+
+    # assert counts reflect all records from dataset, no deduping
+    assert all_records_df.source.value_counts().to_dict() == {"alma": 254, "dspace": 194}
+
+    # assert run_date min/max dates align with min/max for all runs
+    assert all_records_df.run_date.min() == date(2024, 12, 1)
+    assert all_records_df.run_date.max() == date(2025, 2, 5)
+
+
+def test_dataset_all_current_records_deduped(local_dataset_with_runs):
+    local_dataset_with_runs.load(current_records=True)
+    all_records_df = local_dataset_with_runs.read_dataframe()
+
+    # assert both sources have accurate record counts for current records only
+    assert all_records_df.source.value_counts().to_dict() == {"dspace": 90, "alma": 100}
+
+    # assert only one "full" run, per source
+    assert len(all_records_df[all_records_df.run_type == "full"].run_id.unique()) == 2
+
+    # assert run_date min/max dates align with both sources min/max dates
+    assert all_records_df.run_date.min() == date(2025, 1, 1)  # both
+    assert all_records_df.run_date.max() == date(2025, 2, 5)  # dspace
+
+
+def test_dataset_source_current_records_deduped(local_dataset_with_runs):
+    local_dataset_with_runs.load(current_records=True, source="alma")
+    alma_records_df = local_dataset_with_runs.read_dataframe()
+
+    # assert only alma records present and correct count
+    assert alma_records_df.source.value_counts().to_dict() == {"alma": 100}
+
+    # assert only one "full" run
+    assert len(alma_records_df[alma_records_df.run_type == "full"].run_id.unique()) == 1
+
+    # assert run_date min/max dates are correct for single source
+    assert alma_records_df.run_date.min() == date(2025, 1, 1)
+    assert alma_records_df.run_date.max() == date(2025, 1, 5)
+
+
+def test_dataset_all_read_methods_get_deduplication(
+    local_dataset_with_runs,
+):
+    local_dataset_with_runs.load(current_records=True, source="alma")
+
+    full_df = local_dataset_with_runs.read_dataframe()
+    all_records = list(local_dataset_with_runs.read_dicts_iter())
+    transformed_records = list(local_dataset_with_runs.read_transformed_records_iter())
+
+    assert len(full_df) == len(all_records) == len(transformed_records)
