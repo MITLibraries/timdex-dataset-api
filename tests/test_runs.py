@@ -25,7 +25,7 @@ def test_timdex_run_manager_parse_single_parquet_file_success(timdex_run_manager
     """Parse run metadata from first parquet file in fixture dataset.  We know the details
     of this ETL run in advance given the deterministic fixture that generated it."""
     parquet_filepath = timdex_run_manager.timdex_dataset.dataset.files[0]
-    run_metadata = timdex_run_manager.parse_run_metadata_from_parquet_file(
+    run_metadata = timdex_run_manager._parse_run_metadata_from_parquet_file(
         parquet_filepath
     )
     assert run_metadata["source"] == "alma"
@@ -37,7 +37,7 @@ def test_timdex_run_manager_parse_single_parquet_file_success(timdex_run_manager
 
 
 def test_timdex_run_manager_parse_multiple_parquet_files(timdex_run_manager):
-    parquet_metadata_df = timdex_run_manager.get_parquet_files_run_metadata()
+    parquet_metadata_df = timdex_run_manager._get_parquet_files_run_metadata()
 
     # assert 16 rows for this per-file dataframe, despite only 14 distinct ETL "runs"
     assert len(parquet_metadata_df) == 16
@@ -75,7 +75,7 @@ def test_timdex_run_manager_caches_runs_dataframe(timdex_run_manager):
     assert timdex_run_manager._runs_metadata_cache is not None
 
     with patch.object(
-        timdex_run_manager, "get_parquet_files_run_metadata"
+        timdex_run_manager, "_get_parquet_files_run_metadata"
     ) as mocked_intermediate_method:
         mocked_intermediate_method.side_effect = Exception(
             "I am not reached, cache is used."
