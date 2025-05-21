@@ -120,6 +120,7 @@ class TIMDEXDataset:
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
         self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
+        self._dedupe_on_read: bool = False
 
     @property
     def row_count(self) -> int:
@@ -162,6 +163,7 @@ class TIMDEXDataset:
         self._load_pyarrow_dataset()
 
         # if current_records flag set, limit to parquet files associated with current runs
+        self._dedupe_on_read = current_records
         if current_records:
             timdex_run_manager = TIMDEXRunManager(timdex_dataset=self)
 
@@ -467,14 +469,55 @@ class TIMDEXDataset:
                 "Dataset is not loaded. Please call the `load` method first."
             )
         dataset = self._get_filtered_dataset(**filters)
-        for batch in dataset.to_batches(
+
+        batches = dataset.to_batches(
             columns=columns,
             batch_size=self.config.read_batch_size,
             batch_readahead=self.config.batch_read_ahead,
             fragment_readahead=self.config.fragment_read_ahead,
-        ):
+        )
+
+        if self._dedupe_on_read:
+            yield from self._yield_deduped_batches(batches)
+        else:
+            for batch in batches:
+                if len(batch) > 0:
+                    yield batch
+
+    def _yield_deduped_batches(
+        self, batches: Iterator[pa.RecordBatch]
+    ) -> Iterator[pa.RecordBatch]:
+        """Method to yield record deduped batches.
+
+        Extending the normal behavior of yielding batches untouched, this method keeps
+        track of seen timdex_record_id's, yielding them only once.  For this method to
+        yield the most current version of a record -- most common usage -- it is required
+        that the batches are pre-ordered so the most recent record version is encountered
+        first.
+        """
+        seen_records = set()
+        for batch in batches:
             if len(batch) > 0:
-                yield batch
+                # init list of batch indices for records unseen
+                unseen_batch_indices = []
+
+                # get list of timdex ids from batch
+                timdex_ids = batch.column("timdex_record_id").to_pylist()
+
+                # check each record id and track unseen ones
+                for i, record_id in enumerate(timdex_ids):
+                    if record_id not in seen_records:
+                        unseen_batch_indices.append(i)
+                        seen_records.add(record_id)
+
+                # if all records from batch were seen, continue
+                if not unseen_batch_indices:
+                    continue
+
+                # else, yield unseen records from batch
+                deduped_batch = batch.take(pa.array(unseen_batch_indices))  # type: ignore[arg-type]
+                if len(deduped_batch) > 0:
+                    yield deduped_batch
 
     def read_dataframes_iter(
         self,
@@ -536,13 +579,14 @@ class TIMDEXDataset:
     ) -> Iterator[dict]:
         """Yield individual transformed records as dictionaries from the dataset.
 
-        If 'transformed_record' is None (i.e., action="skip"|"error"), the yield
-        statement will not be executed for the row.
+        If 'transformed_record' is None (common scenarios are action="skip"|"error"), the
+        yield statement will not be executed for the row.  Note that for action="delete" a
+        transformed record still may be yielded if present.
 
         Args: see self.read_batches_iter()
         """
         for record_dict in self.read_dicts_iter(
-            columns=["transformed_record"],
+            columns=["timdex_record_id", "transformed_record"],
             **filters,
         ):
             if transformed_record := record_dict["transformed_record"]:
