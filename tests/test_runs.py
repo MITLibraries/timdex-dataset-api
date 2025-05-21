@@ -72,7 +72,7 @@ def test_timdex_run_manager_get_all_current_run_parquet_files_success(
 def test_timdex_run_manager_get_source_current_run_parquet_files_success(
     timdex_run_manager,
 ):
-    ordered_parquet_files = timdex_run_manager.get_current_source_parquet_files("alma")
+    ordered_parquet_files = timdex_run_manager._get_current_source_parquet_files("alma")
 
     # assert 6 parquet files, despite being 8 total for 'alma' source
     # this represents the last full run and all daily since

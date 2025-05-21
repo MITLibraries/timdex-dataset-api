@@ -85,7 +85,22 @@ class TIMDEXRunManager:
         )
         return grouped_runs_df
 
-    def get_current_source_parquet_files(self, source: str) -> list[str]:
+    def get_current_parquet_files(self, source: str | None = None) -> list[str]:
+        """Get reverse chronological list of parquet files associated with current runs.
+
+        Args:
+            source: if provided, limits parquet files to only that source
+        """
+        runs_df = self.get_runs_metadata()  # run metadata is cached for future calls
+        sources = [source] if source else list(runs_df.source.unique())
+
+        source_parquet_files = []
+        for _source in sources:
+            source_parquet_files.extend(self._get_current_source_parquet_files(_source))
+
+        return source_parquet_files
+
+    def _get_current_source_parquet_files(self, source: str) -> list[str]:
         """Get reverse chronological list of current parquet files for a source.
 
         Args:
@@ -114,17 +129,6 @@ class TIMDEXRunManager:
         ordered_parquet_files.extend(last_full_run.parquet_files)
 
         return ordered_parquet_files
-
-    def get_current_parquet_files(self) -> list[str]:
-        """Get reverse chronological list of current parquet files for ALL sources."""
-        runs_df = self.get_runs_metadata()  # run metadata is cached for future calls
-        sources = list(runs_df.source.unique())
-
-        source_parquet_files = []
-        for source in sources:
-            source_parquet_files.extend(self.get_current_source_parquet_files(source))
-
-        return source_parquet_files
 
     def _get_parquet_files_run_metadata(self, max_workers: int = 250) -> pd.DataFrame:
         """Retrieve run metadata from parquet file(s) in dataset.

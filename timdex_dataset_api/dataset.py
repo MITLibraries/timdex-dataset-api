@@ -167,12 +167,12 @@ class TIMDEXDataset:
         if current_records:
             timdex_run_manager = TIMDEXRunManager(timdex_dataset=self)
 
-            # if filters.source is set, further limit to only this source
-            source = filters.get("source")
-            if source:
-                self.paths = timdex_run_manager.get_current_source_parquet_files(source)
-            else:
-                self.paths = timdex_run_manager.get_current_parquet_files()
+            # update paths, limiting by source if set
+            self.paths = timdex_run_manager.get_current_parquet_files(
+                source=filters.get("source")
+            )
+
+            # reload pyarrow dataset
             self._load_pyarrow_dataset()
 
         # filter dataset
