@@ -24,7 +24,7 @@ from timdex_dataset_api.dataset import (
 def test_dataset_init_success(location, expected_file_system, expected_source):
     timdex_dataset = TIMDEXDataset(location=location)
     assert isinstance(timdex_dataset.filesystem, expected_file_system)
-    assert timdex_dataset.source == expected_source
+    assert timdex_dataset.paths == expected_source
 
 
 def test_dataset_init_env_vars_set_config(monkeypatch, local_dataset_location):
@@ -79,8 +79,7 @@ def test_dataset_load_s3_sets_filesystem_and_dataset_success(
     timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
     result = timdex_dataset.load()
 
-    mock_get_s3_fs.assert_called_once()
-    mock_pyarrow_ds.assert_called_once_with(
+    mock_pyarrow_ds.assert_called_with(
         "bucket/path/to/dataset",
         schema=timdex_dataset.schema,
         format="parquet",
@@ -135,6 +134,22 @@ def test_dataset_load_with_multi_nonpartition_filters_success(fixed_local_datase
     )
 
     assert fixed_local_dataset.row_count == 1
+
+
+def test_dataset_load_current_records_all_sources_success(dataset_with_runs_location):
+    timdex_dataset = TIMDEXDataset(dataset_with_runs_location)
+    timdex_dataset.load(current_records=True)
+
+    # 14 total parquet files, only 12 related to current runs
+    assert len(timdex_dataset.dataset.files) == 12
+
+
+def test_dataset_load_current_records_one_source_success(dataset_with_runs_location):
+    timdex_dataset = TIMDEXDataset(dataset_with_runs_location)
+    timdex_dataset.load(current_records=True, source="alma")
+
+    # 7 total parquet files for source, only 6 related to current runs
+    assert len(timdex_dataset.dataset.files) == 6
 
 
 def test_dataset_get_filtered_dataset_with_single_nonpartition_success(
