@@ -138,9 +138,13 @@ def test_dataset_load_with_multi_nonpartition_filters_success(fixed_local_datase
 
 def test_dataset_load_current_records_all_sources_success(dataset_with_runs_location):
     timdex_dataset = TIMDEXDataset(dataset_with_runs_location)
-    timdex_dataset.load(current_records=True)
 
-    # 14 total parquet files, only 12 related to current runs
+    # 16 total parquet files, with current_records=False we get them all
+    timdex_dataset.load(current_records=False)
+    assert len(timdex_dataset.dataset.files) == 16
+
+    # 16 total parquet files, with current_records=True we only get 12 for current runs
+    timdex_dataset.load(current_records=True)
     assert len(timdex_dataset.dataset.files) == 12
 
 
