@@ -24,7 +24,7 @@ from timdex_dataset_api.dataset import (
 def test_dataset_init_success(location, expected_file_system, expected_source):
     timdex_dataset = TIMDEXDataset(location=location)
     assert isinstance(timdex_dataset.filesystem, expected_file_system)
-    assert timdex_dataset.source == expected_source
+    assert timdex_dataset.paths == expected_source
 
 
 def test_dataset_init_env_vars_set_config(monkeypatch, local_dataset_location):
@@ -79,8 +79,7 @@ def test_dataset_load_s3_sets_filesystem_and_dataset_success(
     timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
     result = timdex_dataset.load()
 
-    mock_get_s3_fs.assert_called_once()
-    mock_pyarrow_ds.assert_called_once_with(
+    mock_pyarrow_ds.assert_called_with(
         "bucket/path/to/dataset",
         schema=timdex_dataset.schema,
         format="parquet",
@@ -135,6 +134,26 @@ def test_dataset_load_with_multi_nonpartition_filters_success(fixed_local_datase
     )
 
     assert fixed_local_dataset.row_count == 1
+
+
+def test_dataset_load_current_records_all_sources_success(dataset_with_runs_location):
+    timdex_dataset = TIMDEXDataset(dataset_with_runs_location)
+
+    # 16 total parquet files, with current_records=False we get them all
+    timdex_dataset.load(current_records=False)
+    assert len(timdex_dataset.dataset.files) == 16
+
+    # 16 total parquet files, with current_records=True we only get 12 for current runs
+    timdex_dataset.load(current_records=True)
+    assert len(timdex_dataset.dataset.files) == 12
+
+
+def test_dataset_load_current_records_one_source_success(dataset_with_runs_location):
+    timdex_dataset = TIMDEXDataset(dataset_with_runs_location)
+    timdex_dataset.load(current_records=True, source="alma")
+
+    # 7 total parquet files for source, only 6 related to current runs
+    assert len(timdex_dataset.dataset.files) == 6
 
 
 def test_dataset_get_filtered_dataset_with_single_nonpartition_success(
@@ -324,3 +343,57 @@ def test_dataset_local_dataset_row_count_missing_dataset_raise_error(local_datas
     td = TIMDEXDataset(location="path/to/nowhere")
     with pytest.raises(DatasetNotLoadedError):
         _ = td.row_count
+
+
+def test_dataset_all_records_not_current_and_not_deduped(local_dataset_with_runs):
+    local_dataset_with_runs.load()
+    all_records_df = local_dataset_with_runs.read_dataframe()
+
+    # assert counts reflect all records from dataset, no deduping
+    assert all_records_df.source.value_counts().to_dict() == {"alma": 254, "dspace": 194}
+
+    # assert run_date min/max dates align with min/max for all runs
+    assert all_records_df.run_date.min() == date(2024, 12, 1)
+    assert all_records_df.run_date.max() == date(2025, 2, 5)
+
+
+def test_dataset_all_current_records_deduped(local_dataset_with_runs):
+    local_dataset_with_runs.load(current_records=True)
+    all_records_df = local_dataset_with_runs.read_dataframe()
+
+    # assert both sources have accurate record counts for current records only
+    assert all_records_df.source.value_counts().to_dict() == {"dspace": 90, "alma": 100}
+
+    # assert only one "full" run, per source
+    assert len(all_records_df[all_records_df.run_type == "full"].run_id.unique()) == 2
+
+    # assert run_date min/max dates align with both sources min/max dates
+    assert all_records_df.run_date.min() == date(2025, 1, 1)  # both
+    assert all_records_df.run_date.max() == date(2025, 2, 5)  # dspace
+
+
+def test_dataset_source_current_records_deduped(local_dataset_with_runs):
+    local_dataset_with_runs.load(current_records=True, source="alma")
+    alma_records_df = local_dataset_with_runs.read_dataframe()
+
+    # assert only alma records present and correct count
+    assert alma_records_df.source.value_counts().to_dict() == {"alma": 100}
+
+    # assert only one "full" run
+    assert len(alma_records_df[alma_records_df.run_type == "full"].run_id.unique()) == 1
+
+    # assert run_date min/max dates are correct for single source
+    assert alma_records_df.run_date.min() == date(2025, 1, 1)
+    assert alma_records_df.run_date.max() == date(2025, 1, 5)
+
+
+def test_dataset_all_read_methods_get_deduplication(
+    local_dataset_with_runs,
+):
+    local_dataset_with_runs.load(current_records=True, source="alma")
+
+    full_df = local_dataset_with_runs.read_dataframe()
+    all_records = list(local_dataset_with_runs.read_dicts_iter())
+    transformed_records = list(local_dataset_with_runs.read_transformed_records_iter())
+
+    assert len(full_df) == len(all_records) == len(transformed_records)

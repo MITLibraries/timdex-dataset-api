@@ -85,7 +85,22 @@ class TIMDEXRunManager:
         )
         return grouped_runs_df
 
-    def get_current_source_parquet_files(self, source: str) -> list[str]:
+    def get_current_parquet_files(self, source: str | None = None) -> list[str]:
+        """Get reverse chronological list of parquet files associated with current runs.
+
+        Args:
+            source: if provided, limits parquet files to only that source
+        """
+        runs_df = self.get_runs_metadata()  # run metadata is cached for future calls
+        sources = [source] if source else list(runs_df.source.unique())
+
+        source_parquet_files = []
+        for _source in sources:
+            source_parquet_files.extend(self._get_current_source_parquet_files(_source))
+
+        return source_parquet_files
+
+    def _get_current_source_parquet_files(self, source: str) -> list[str]:
         """Get reverse chronological list of current parquet files for a source.
 
         Args:
@@ -166,8 +181,9 @@ class TIMDEXRunManager:
         """
         parquet_file = pq.ParquetFile(
             parquet_filepath,
-            filesystem=self.timdex_dataset.filesystem,  # type: ignore[union-attr]
+            filesystem=self.timdex_dataset.filesystem,
         )
+
         file_meta = parquet_file.metadata.to_dict()
         num_rows = file_meta["num_rows"]
         columns_meta = file_meta["row_groups"][0]["columns"]  # type: ignore[typeddict-item]

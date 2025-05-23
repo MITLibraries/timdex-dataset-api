@@ -138,6 +138,7 @@ def dataset_with_runs_location(tmp_path) -> str:
         num_records, source, run_date, run_type, action, run_id = params
         records = generate_sample_records(
             num_records,
+            timdex_record_id_prefix=source,
             source=source,
             run_date=run_date,
             run_type=run_type,
@@ -147,3 +148,8 @@ def dataset_with_runs_location(tmp_path) -> str:
         timdex_dataset.write(records)
 
     return location
+
+
+@pytest.fixture
+def local_dataset_with_runs(dataset_with_runs_location) -> TIMDEXDataset:
+    return TIMDEXDataset(dataset_with_runs_location)
