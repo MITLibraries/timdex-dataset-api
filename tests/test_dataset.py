@@ -1,4 +1,5 @@
-# ruff: noqa: S105, S106, SLF001, PLR2004
+# ruff: noqa: D205, S105, S106, SLF001, PD901, PLR2004
+
 import os
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -397,3 +398,61 @@ def test_dataset_all_read_methods_get_deduplication(
     transformed_records = list(local_dataset_with_runs.read_transformed_records_iter())
 
     assert len(full_df) == len(all_records) == len(transformed_records)
+
+
+def test_dataset_current_records_no_additional_filtering_accurate_records_yielded(
+    local_dataset_with_runs,
+):
+    local_dataset_with_runs.load(current_records=True, source="alma")
+    df = local_dataset_with_runs.read_dataframe()
+    assert df.action.value_counts().to_dict() == {"index": 99, "delete": 1}
+
+
+def test_dataset_current_records_action_filtering_accurate_records_yielded(
+    local_dataset_with_runs,
+):
+    local_dataset_with_runs.load(current_records=True, source="alma")
+    df = local_dataset_with_runs.read_dataframe(action="index")
+    assert df.action.value_counts().to_dict() == {"index": 99}
+
+
+def test_dataset_current_records_index_filtering_accurate_records_yielded(
+    local_dataset_with_runs,
+):
+    """This is a somewhat complex test, but demonstrates that only 'current' records
+    are yielded when .load(current_records=True) is applied.
+
+    Given these runs from the fixture:
+    [
+        ...
+        (25, "alma", "2025-01-03", "daily", "index", "run-5"),   <---- filtered to
+        (10, "alma", "2025-01-04", "daily", "delete", "run-6"),  <---- influences current
+        ...
+    ]
+
+    Though we are filtering to run-5, which has 25 total records to-index, we see only 15
+    records yielded.  Why?  This is because while we have filtered to only yield from
+    run-5, run-6 had 10 deletes which made records alma:0|9 no longer "current" in run-5.
+    As we yielded records reverse chronologically, the deletes from run-6 (alma:0-alma:9)
+    "influenced" what records we would see as we continue backwards in time.
+    """
+    local_dataset_with_runs.load(current_records=True, source="alma")
+    df = local_dataset_with_runs.read_dataframe(run_id="run-5")
+    assert df.action.value_counts().to_dict() == {"index": 15}
+    assert list(df.timdex_record_id) == [
+        "alma:10",
+        "alma:11",
+        "alma:12",
+        "alma:13",
+        "alma:14",
+        "alma:15",
+        "alma:16",
+        "alma:17",
+        "alma:18",
+        "alma:19",
+        "alma:20",
+        "alma:21",
+        "alma:22",
+        "alma:23",
+        "alma:24",
+    ]
