@@ -167,7 +167,7 @@ class TIMDEXDataset:
         if current_records:
             timdex_run_manager = TIMDEXRunManager(timdex_dataset=self)
 
-            # update paths, limiting by source if set
+            timdex_run_manager = TIMDEXRunManager(dataset=self.dataset)
             self.paths = timdex_run_manager.get_current_parquet_files(
                 source=filters.get("source")
             )
