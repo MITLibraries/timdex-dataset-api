@@ -3,13 +3,10 @@
 import concurrent.futures
 import logging
 import time
-from typing import TYPE_CHECKING
 
 import pandas as pd
+import pyarrow.dataset as ds
 import pyarrow.parquet as pq
-
-if TYPE_CHECKING:
-    from timdex_dataset_api.dataset import TIMDEXDataset
 
 logger = logging.getLogger(__name__)
 
@@ -17,11 +14,8 @@ logger = logging.getLogger(__name__)
 class TIMDEXRunManager:
     """Manages and provides access to ETL run metadata from the TIMDEX parquet dataset."""
 
-    def __init__(self, timdex_dataset: "TIMDEXDataset"):
-        self.timdex_dataset: TIMDEXDataset = timdex_dataset
-        if self.timdex_dataset.dataset is None:
-            self.timdex_dataset.load()
-
+    def __init__(self, dataset: ds.Dataset):
+        self.dataset = dataset
         self._runs_metadata_cache: pd.DataFrame | None = None
 
     def clear_cache(self) -> None:
@@ -143,7 +137,7 @@ class TIMDEXRunManager:
         """
         with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = []
-            for parquet_filepath in self.timdex_dataset.dataset.files:  # type: ignore[attr-defined]
+            for parquet_filepath in self.dataset.files:  # type: ignore[attr-defined]
                 future = executor.submit(
                     self._parse_run_metadata_from_parquet_file,
                     parquet_filepath,
@@ -181,7 +175,7 @@ class TIMDEXRunManager:
         """
         parquet_file = pq.ParquetFile(
             parquet_filepath,
-            filesystem=self.timdex_dataset.filesystem,
+            filesystem=self.dataset.filesystem,  # type: ignore[attr-defined]
         )
 
         file_meta = parquet_file.metadata.to_dict()

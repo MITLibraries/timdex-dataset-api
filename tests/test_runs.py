@@ -12,19 +12,21 @@ from timdex_dataset_api.run import TIMDEXRunManager
 @pytest.fixture
 def timdex_run_manager(dataset_with_runs_location):
     timdex_dataset = TIMDEXDataset(dataset_with_runs_location)
-    return TIMDEXRunManager(timdex_dataset=timdex_dataset)
+    timdex_dataset.load()
+    return TIMDEXRunManager(dataset=timdex_dataset.dataset)
 
 
 def test_timdex_run_manager_init(dataset_with_runs_location):
     timdex_dataset = TIMDEXDataset(dataset_with_runs_location)
-    timdex_run_manager = TIMDEXRunManager(timdex_dataset=timdex_dataset)
+    timdex_dataset.load()
+    timdex_run_manager = TIMDEXRunManager(dataset=timdex_dataset.dataset)
     assert timdex_run_manager._runs_metadata_cache is None
 
 
 def test_timdex_run_manager_parse_single_parquet_file_success(timdex_run_manager):
     """Parse run metadata from first parquet file in fixture dataset.  We know the details
     of this ETL run in advance given the deterministic fixture that generated it."""
-    parquet_filepath = timdex_run_manager.timdex_dataset.dataset.files[0]
+    parquet_filepath = timdex_run_manager.dataset.files[0]
     run_metadata = timdex_run_manager._parse_run_metadata_from_parquet_file(
         parquet_filepath
     )
