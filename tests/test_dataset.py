@@ -436,9 +436,16 @@ def test_dataset_current_records_index_filtering_accurate_records_yielded(
     As we yielded records reverse chronologically, the deletes from run-6 (alma:0-alma:9)
     "influenced" what records we would see as we continue backwards in time.
     """
+    # with current_records=False, we get all 25 records from run-5
+    local_dataset_with_runs.load(current_records=False, source="alma")
+    df = local_dataset_with_runs.read_dataframe(run_id="run-5")
+    assert len(df) == 25
+
+    # with current_records=True, we only get 15 records from run-5
+    # because newer run-6 influenced what records are current for older run-5
     local_dataset_with_runs.load(current_records=True, source="alma")
     df = local_dataset_with_runs.read_dataframe(run_id="run-5")
-    assert df.action.value_counts().to_dict() == {"index": 15}
+    assert len(df) == 15
     assert list(df.timdex_record_id) == [
         "alma:10",
         "alma:11",
