@@ -480,13 +480,13 @@ class TIMDEXDataset:
         )
 
         if self._current_records:
-            yield from self._yield_current_record_deduped_batches(batches)
+            yield from self._yield_current_record_batches(batches)
         else:
             for batch in batches:
                 if len(batch) > 0:
                     yield batch
 
-    def _yield_current_record_deduped_batches(
+    def _yield_current_record_batches(
         self,
         batches: Iterator[pa.RecordBatch],
     ) -> Iterator[pa.RecordBatch]:
@@ -503,27 +503,26 @@ class TIMDEXDataset:
             contains the actual records and columns we are interested in, and may contain
             filtering
 
-            2. "id_batches" - a lightweight RecordBatch iterator that only contains the
-            'timdex_record_id' column from a pre-filtering dataset saved during .load()
+            2. "unfiltered_batches" - a lightweight RecordBatch iterator that only
+            contains the 'timdex_record_id' column from a pre-filtering dataset saved
+            during .load()
 
         These two iterators are guaranteed to have the same number of total batches based
         on how pyarrow.Dataset.to_batches() reads from parquet files.  Even if dataset
         filtering is applied, this does not affect the batch count; you may just end up
         with smaller or empty batches.
 
-        As such, as we move through the batches we use batches from the "ids_iterator" to
-        keep a list of seen timdex_record_id's.  Even if a timdex_record_is not in the
-        "records_iterator", likely due to filtering, we will mark the truly most current
-        version as "seen" and not yield it from any future batches.
+        As we move through the record batches we use unfiltered batches to keep a list of
+        seen timdex_record_ids.  Even if a timdex_record_is not in the record batch --
+        likely due to filtering -- we will mark that timdex_record_id as "seen" and not
+        yield it from any future batches.
 
         Args:
             - batches: batches of records to actually yield from
             - current_record_id_batches: batches of timdex_record_id's that inform when
             to yield or skip a record for a batch
         """
-        # create a RecordBatch iterator from self._current_records_dataset, which was
-        # saved during .load() before any filtering was applied
-        id_batches = self._current_records_dataset.to_batches(
+        unfiltered_batches = self._current_records_dataset.to_batches(
             columns=["timdex_record_id"],
             batch_size=self.config.read_batch_size,
             batch_readahead=self.config.batch_read_ahead,
@@ -531,27 +530,24 @@ class TIMDEXDataset:
         )
 
         seen_records = set()
-        for id_batch, batch in zip(id_batches, batches, strict=True):
-            dedupe_ids = id_batch.column("timdex_record_id").to_pylist()
-            batch_ids = batch.column("timdex_record_id").to_pylist()
-
+        for unfiltered_batch, batch in zip(unfiltered_batches, batches, strict=True):
             # init list of indices from the batch for records we have never yielded
             unseen_batch_indices = []
 
             # check each record id and track unseen ones
-            for i, record_id in enumerate(batch_ids):
+            for i, record_id in enumerate(batch.column("timdex_record_id").to_pylist()):
                 if record_id not in seen_records:
                     unseen_batch_indices.append(i)
 
             # even if not a record to yield, update our list of seen records from all
-            # records in the id_batch
-            seen_records.update(dedupe_ids)
+            # records in the unfiltered batch
+            seen_records.update(unfiltered_batch.column("timdex_record_id").to_pylist())
 
-            # if no records unseen this batch, skip yielding
+            # if no unseen records from this batch, skip yielding entirely
             if not unseen_batch_indices:
                 continue
 
-            # use the unseen indices to create a new, subset of the batch and yield it
+            # create a new RecordBatch using the unseen indices of the batch
             _batch = batch.take(pa.array(unseen_batch_indices))  # type: ignore[arg-type]
             if len(_batch) > 0:
                 yield _batch
