@@ -120,7 +120,9 @@ class TIMDEXDataset:
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
         self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
-        self._dedupe_on_read: bool = False
+
+        self._current_records: bool = False
+        self._current_records_dataset: ds.Dataset = None  # type: ignore[assignment]
 
     @property
     def row_count(self) -> int:
@@ -153,6 +155,10 @@ class TIMDEXDataset:
             - filters: kwargs typed via DatasetFilters TypedDict
                 - Filters passed directly in method call, e.g. source="alma",
                  run_date="2024-12-20", etc., but are typed according to DatasetFilters.
+            - current_records: bool
+                - if True, the TIMDEXRunManager will be used to retrieve a list of parquet
+                files associated with current runs, some internal flags will be set, all
+                ensuring that only current records are yielded for any read methods
         """
         start_time = time.perf_counter()
 
@@ -160,20 +166,21 @@ class TIMDEXDataset:
         _, self.paths = self.parse_location(self.location)
 
         # perform initial load of full dataset
-        self._load_pyarrow_dataset()
+        self.dataset = self._load_pyarrow_dataset()
 
-        # if current_records flag set, limit to parquet files associated with current runs
-        self._dedupe_on_read = current_records
+        self._current_records = current_records
         if current_records:
-            timdex_run_manager = TIMDEXRunManager(timdex_dataset=self)
 
-            # update paths, limiting by source if set
+            timdex_run_manager = TIMDEXRunManager(dataset=self.dataset)
             self.paths = timdex_run_manager.get_current_parquet_files(
                 source=filters.get("source")
             )
 
-            # reload pyarrow dataset
-            self._load_pyarrow_dataset()
+            # reload pyarrow dataset, filtered now to an explicit list of parquet files
+            # also save an instance of the dataset before any additional filtering
+            dataset = self._load_pyarrow_dataset()
+            self.dataset = dataset
+            self._current_records_dataset = dataset
 
         # filter dataset
         self.dataset = self._get_filtered_dataset(**filters)
@@ -183,9 +190,9 @@ class TIMDEXDataset:
             f"{round(time.perf_counter()-start_time, 2)}s"
         )
 
-    def _load_pyarrow_dataset(self) -> None:
+    def _load_pyarrow_dataset(self) -> ds.Dataset:
         """Load the pyarrow dataset per local filesystem and paths attributes."""
-        self.dataset = ds.dataset(
+        return ds.dataset(
             self.paths,
             schema=self.schema,
             format="parquet",
@@ -449,19 +456,14 @@ class TIMDEXDataset:
         """Yield pyarrow.RecordBatches from the dataset.
 
         While batch_size will limit the max rows per batch, filtering may result in some
-        batches have less than this limit.
+        batches having less than this limit.
+
+        If the flag self._current_records is set, this method leans on
+        self._yield_current_record_deduped_batches() to apply deduplication of records to
+        ensure only current versions of the record are ever yielded.
 
         Args:
             - columns: list[str], list of columns to return from the dataset
-            - batch_size: int, max number of rows to yield per batch
-            - batch_read_ahead: int, the number of batches to read ahead in a file. This
-                might not work for all file formats. Increasing this number will increase
-                RAM usage but could also improve IO utilization. Pyarrow default is 16,
-                but this library defaults to 0 to prioritize memory footprint.
-            - fragment_read_ahead: int, The number of files to read ahead. Increasing this
-                number will increase RAM usage but could also improve IO utilization.
-                Pyarrow default is 4, but this library defaults to 0 to prioritize memory
-                footprint.
             - filters: pairs of column:value to filter the dataset
         """
         if not self.dataset:
@@ -477,47 +479,78 @@ class TIMDEXDataset:
             fragment_readahead=self.config.fragment_read_ahead,
         )
 
-        if self._dedupe_on_read:
-            yield from self._yield_deduped_batches(batches)
+        if self._current_records:
+            yield from self._yield_current_record_batches(batches)
         else:
             for batch in batches:
                 if len(batch) > 0:
                     yield batch
 
-    def _yield_deduped_batches(
-        self, batches: Iterator[pa.RecordBatch]
+    def _yield_current_record_batches(
+        self,
+        batches: Iterator[pa.RecordBatch],
     ) -> Iterator[pa.RecordBatch]:
-        """Method to yield record deduped batches.
+        """Method to yield only the most recent version of each record.
 
-        Extending the normal behavior of yielding batches untouched, this method keeps
-        track of seen timdex_record_id's, yielding them only once.  For this method to
-        yield the most current version of a record -- most common usage -- it is required
-        that the batches are pre-ordered so the most recent record version is encountered
-        first.
+        When multiple versions of a record (same timdex_record_id) exist in the dataset,
+        this method ensures only the most recent version is returned.  If filtering is
+        applied that removes this most recent version of a record, that timdex_record_id
+        will not be yielded at all.
+
+        This is achieved by iterating over TWO record batch iterators in parallel:
+
+            1. "batches" - the RecordBatch iterator passed to this method which
+            contains the actual records and columns we are interested in, and may contain
+            filtering
+
+            2. "unfiltered_batches" - a lightweight RecordBatch iterator that only
+            contains the 'timdex_record_id' column from a pre-filtering dataset saved
+            during .load()
+
+        These two iterators are guaranteed to have the same number of total batches based
+        on how pyarrow.Dataset.to_batches() reads from parquet files.  Even if dataset
+        filtering is applied, this does not affect the batch count; you may just end up
+        with smaller or empty batches.
+
+        As we move through the record batches we use unfiltered batches to keep a list of
+        seen timdex_record_ids.  Even if a timdex_record_is not in the record batch --
+        likely due to filtering -- we will mark that timdex_record_id as "seen" and not
+        yield it from any future batches.
+
+        Args:
+            - batches: batches of records to actually yield from
+            - current_record_id_batches: batches of timdex_record_id's that inform when
+            to yield or skip a record for a batch
         """
+        unfiltered_batches = self._current_records_dataset.to_batches(
+            columns=["timdex_record_id"],
+            batch_size=self.config.read_batch_size,
+            batch_readahead=self.config.batch_read_ahead,
+            fragment_readahead=self.config.fragment_read_ahead,
+        )
+
         seen_records = set()
-        for batch in batches:
-            if len(batch) > 0:
-                # init list of batch indices for records unseen
-                unseen_batch_indices = []
+        for unfiltered_batch, batch in zip(unfiltered_batches, batches, strict=True):
+            # init list of indices from the batch for records we have never yielded
+            unseen_batch_indices = []
 
-                # get list of timdex ids from batch
-                timdex_ids = batch.column("timdex_record_id").to_pylist()
+            # check each record id and track unseen ones
+            for i, record_id in enumerate(batch.column("timdex_record_id").to_pylist()):
+                if record_id not in seen_records:
+                    unseen_batch_indices.append(i)
 
-                # check each record id and track unseen ones
-                for i, record_id in enumerate(timdex_ids):
-                    if record_id not in seen_records:
-                        unseen_batch_indices.append(i)
-                        seen_records.add(record_id)
+            # even if not a record to yield, update our list of seen records from all
+            # records in the unfiltered batch
+            seen_records.update(unfiltered_batch.column("timdex_record_id").to_pylist())
 
-                # if all records from batch were seen, continue
-                if not unseen_batch_indices:
-                    continue
+            # if no unseen records from this batch, skip yielding entirely
+            if not unseen_batch_indices:
+                continue
 
-                # else, yield unseen records from batch
-                deduped_batch = batch.take(pa.array(unseen_batch_indices))  # type: ignore[arg-type]
-                if len(deduped_batch) > 0:
-                    yield deduped_batch
+            # create a new RecordBatch using the unseen indices of the batch
+            _batch = batch.take(pa.array(unseen_batch_indices))  # type: ignore[arg-type]
+            if len(_batch) > 0:
+                yield _batch
 
     def read_dataframes_iter(
         self,
