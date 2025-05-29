@@ -41,6 +41,7 @@ TIMDEX_DATASET_SCHEMA = pa.schema(
         pa.field("year", pa.string()),
         pa.field("month", pa.string()),
         pa.field("day", pa.string()),
+        pa.field("run_timestamp", pa.timestamp("us", tz="UTC")),
     )
 )
 
@@ -62,6 +63,7 @@ class DatasetFilters(TypedDict, total=False):
     year: str | None
     month: str | None
     day: str | None
+    run_timestamp: str | datetime | None
 
 
 @dataclass
@@ -112,15 +114,19 @@ class TIMDEXDataset:
             location (str | list[str]): Local filesystem path or an S3 URI to
                 a parquet dataset. For partitioned datasets, set to the base directory.
         """
-        self.location = location
         self.config = config or TIMDEXDatasetConfig()
+        self.location = location
 
+        # pyarrow dataset
         self.filesystem, self.paths = self.parse_location(self.location)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
+
+        # writing
         self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
 
+        # reading
         self._current_records: bool = False
         self._current_records_dataset: ds.Dataset = None  # type: ignore[assignment]
 
@@ -405,26 +411,31 @@ class TIMDEXDataset:
         return self._written_files  # type: ignore[return-value]
 
     def create_record_batches(
-        self,
-        records_iter: Iterator["DatasetRecord"],
+        self, records_iter: Iterator["DatasetRecord"]
     ) -> Iterator[pa.RecordBatch]:
         """Yield pyarrow.RecordBatches for writing.
 
         This method expects an iterator of DatasetRecord instances.
 
-        Each DatasetRecord is validated and serialized to a dictionary before added to a
-        pyarrow.RecordBatch for writing.
+        Each DatasetRecord is serialized to a dictionary, any column data shared by all
+        rows is added to the record, and then added to a pyarrow.RecordBatch for writing.
 
         Args:
             - records_iter: Iterator of DatasetRecord instances
         """
+        run_timestamp = datetime.now(UTC)
         for i, record_batch in enumerate(
             itertools.batched(records_iter, self.config.write_batch_size)
         ):
-            batch = pa.RecordBatch.from_pylist(
-                [record.to_dict() for record in record_batch]
-            )
-            logger.debug(f"Yielding batch {i+1} for dataset writing.")
+            record_dicts = [
+                {
+                    **record.to_dict(),
+                    "run_timestamp": run_timestamp,
+                }
+                for record in record_batch
+            ]
+            batch = pa.RecordBatch.from_pylist(record_dicts)
+            logger.debug(f"Yielding batch {i + 1} for dataset writing.")
             yield batch
 
     def log_write_statistics(self, start_time: float) -> None:

@@ -153,3 +153,57 @@ def dataset_with_runs_location(tmp_path) -> str:
 @pytest.fixture
 def local_dataset_with_runs(dataset_with_runs_location) -> TIMDEXDataset:
     return TIMDEXDataset(dataset_with_runs_location)
+
+
+@pytest.fixture
+def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
+    """Dataset fixture where a single source had multiple runs on the same day.
+
+    After these runs, we'd expect 70 records in Opensearch:
+        - most recent full run "run-2" established a 75 record base
+        - runs "run-3" and "run-4" just modified records; no record count change
+        - run "run-5" deleted 5 records
+
+    If the order of full runs 1 & 2 are not handled correctly, we'd see an incorrect
+    baseline of 100 records.
+
+    If the order of daily runs 4 & 5 are not handled correctly, we'd see 75 records
+    because the deletes would happen before the index just recreated the records.
+    """
+    location = str(tmp_path / "dataset_with_same_day_runs")
+    os.mkdir(location)
+
+    timdex_dataset = TIMDEXDataset(location)
+
+    run_params = []
+
+    # Simulate two "full" runs where "run-2" should establish the baseline.
+    # Simulate daily runs, multiple per day sometimes, where deletes from "run-5" should
+    # be represented.
+    run_params.extend(
+        [
+            (100, "alma", "2025-01-01", "full", "index", "run-1"),
+            (75, "alma", "2025-01-01", "full", "index", "run-2"),
+            (10, "alma", "2025-01-01", "daily", "index", "run-3"),
+            (20, "alma", "2025-01-02", "daily", "index", "run-4"),
+            (5, "alma", "2025-01-02", "daily", "delete", "run-5"),
+        ]
+    )
+
+    for params in run_params:
+        num_records, source, run_date, run_type, action, run_id = params
+        records = generate_sample_records(
+            num_records,
+            timdex_record_id_prefix=source,
+            source=source,
+            run_date=run_date,
+            run_type=run_type,
+            action=action,
+            run_id=run_id,
+        )
+        timdex_dataset.write(records)
+
+    # reload after writes
+    timdex_dataset.load()
+
+    return timdex_dataset
