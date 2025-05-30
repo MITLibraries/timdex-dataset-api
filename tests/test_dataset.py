@@ -8,6 +8,7 @@ import pyarrow as pa
 import pytest
 from pyarrow import fs
 
+from tests.utils import generate_sample_records
 from timdex_dataset_api.dataset import (
     DatasetNotLoadedError,
     TIMDEXDataset,
@@ -466,13 +467,31 @@ def test_dataset_current_records_index_filtering_accurate_records_yielded(
 
 
 @pytest.mark.freeze_time("2025-05-22 01:23:45.567890")
-def test_dataset_write_includes_minted_run_timestamp(
-    dataset_with_same_day_runs,
-):
+def test_dataset_write_includes_minted_run_timestamp(tmp_path):
+    # create dataset
+    location = str(tmp_path / "one_run_at_frozen_time")
+    os.mkdir(location)
+    timdex_dataset = TIMDEXDataset(location)
+
+    run_id = "abc123"
+
+    # perform a single ETL run that should pickup the frozen time for run_timestamp
+    records = generate_sample_records(
+        10,
+        timdex_record_id_prefix="alma",
+        source="alma",
+        run_date="2025-05-22",
+        run_type="full",
+        action="index",
+        run_id=run_id,
+    )
+    timdex_dataset.write(records)
+    timdex_dataset.load()
+
     # assert TIMDEXDataset.write() applies current time as run_timestamp
-    row_dict = next(dataset_with_same_day_runs.read_dicts_iter())
-    assert "run_timestamp" in row_dict
-    assert row_dict["run_timestamp"] == datetime(
+    run_row_dict = next(timdex_dataset.read_dicts_iter())
+    assert "run_timestamp" in run_row_dict
+    assert run_row_dict["run_timestamp"] == datetime(
         2025,
         5,
         22,
@@ -483,8 +502,8 @@ def test_dataset_write_includes_minted_run_timestamp(
         tzinfo=UTC,
     )
 
-    # assert same time is used for entire batch
-    df = dataset_with_same_day_runs.read_dataframe()
+    # assert the same run_timestamp is applied to all rows in the run
+    df = timdex_dataset.read_dataframe(run_id=run_id)
     assert len(list(df.run_timestamp.unique())) == 1
 
 
