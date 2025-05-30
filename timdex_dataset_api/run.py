@@ -52,6 +52,7 @@ class TIMDEXRunManager:
                     "source": "first",
                     "run_date": "first",
                     "run_type": "first",
+                    "run_timestamp": "first",
                     "num_rows": "sum",
                     "filename": list,
                 }
@@ -65,9 +66,9 @@ class TIMDEXRunManager:
             lambda x: len(x)
         )
 
-        # sort by run date and source
+        # sort by run_timestamp (more granularity than run_date) and source
         grouped_runs_df = grouped_runs_df.sort_values(
-            ["run_date", "source"], ascending=False
+            ["run_timestamp", "source"], ascending=False
         )
 
         # cache the result
@@ -185,12 +186,14 @@ class TIMDEXRunManager:
         run_date = columns_meta[4]["statistics"]["max"]
         run_type = columns_meta[5]["statistics"]["max"]
         run_id = columns_meta[7]["statistics"]["max"]
+        run_timestamp = columns_meta[9]["statistics"]["max"]
 
         return {
             "source": source,
             "run_date": run_date,
             "run_type": run_type,
             "run_id": run_id,
+            "run_timestamp": run_timestamp,
             "num_rows": num_rows,
             "filename": parquet_filepath,
         }
