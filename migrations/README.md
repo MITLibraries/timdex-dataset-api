@@ -1,10 +1,16 @@
 # TIMDEX Dataset Migrations
 
-This directory includes manual, bulk migrations of data and schema in the TIMDEX parquet dataset.  Consider it like migrations for a SQL database, except a bit more unstructured and ad-hoc.
+This directory stores data and/or schema modifications that were made to the TIMDEX parquet dataset.  Consider them like ["migrations"](https://en.wikipedia.org/wiki/Schema_migration) for a SQL database, but -- at least at the time of this writing -- considerably more informal and ad-hoc.
+
+Unless otherwise noted, it assumed that these migrations were:
+
+  * manually run by a developer, either on a local machine or some cloud operations
+  * have been performed already, should not be performed again
+  * the migration script does not contain a way to rollback the changes
 
 ##  Structure
 
-Each migration is either a single python file, or a dedicated directory, with that follows the naming convention:
+Each migration is either a single python file, or a dedicated directory, that follow this naming convention:
 
   - `###_`: incrementing migration sequence number
   - `YYYY_MM_DD_`: approximate date of migration creation and run
@@ -14,6 +20,8 @@ Examples:
 
   - `001_2025_05_30_backfill_run_timestamp_column.py` --> single file
   - `002_2025_06_15_remove_errant_parquet_files` --> directory that contains 1+ files
+
+Files inside a migration directory like `002_2025_06_15_remove_errant_parquet_files` are _not_ expected to follow any particular format (though a `README.md` is encourage to inform future developers how it was performed!).
 
 The entrypoint for each migration should contain a docstring at the root of the file with a structure like:
 

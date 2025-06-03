@@ -14,6 +14,15 @@ This migration performs the following:
     b. retrieve the file creation date of the parquet file, this becomes the run_timestamp
     c. rewrite the parquet file with a new run_timestamp column
 
+Side effects:
+
+1- Loss of "Last Modified" date in S3
+
+This migration is using the original "Last Modified" date in S3 that was minted when the
+parquet file was written.  It is storing that data in a `run_timestamp` column and thus
+will persist, but the actual parquet file will LOSE this "Last Modified" date when it is
+recreated.
+
 Usage:
 
 pipenv run python migrations/001_2025_05_30_backfill_run_timestamp_column.py \
@@ -157,6 +166,10 @@ def backfill_parquet_file(
 
 def get_s3_object_creation_date(file_path: str, filesystem: fs.FileSystem) -> datetime:
     """Get the creation date of an S3 object.
+
+    This function assumes that all datetimes coming back are coming from the same source
+    and will be formatted similarly, which means either all values are timezone aware or
+    not.
 
     Args:
         file_path: Path to the S3 object
