@@ -79,34 +79,6 @@ def backfill_dataset(location: str, *, dry_run: bool = False) -> None:
     )
 
 
-def get_s3_object_creation_date(file_path: str, filesystem: fs.FileSystem) -> datetime:
-    """Get the creation date of an S3 object.
-
-    Args:
-        file_path: Path to the S3 object
-        filesystem: PyArrow S3 filesystem instance
-
-    Returns:
-        datetime: Creation date of the S3 object in UTC
-    """
-    try:
-        # Get creation date of S3 object
-        file_info = filesystem.get_file_info(file_path)
-        creation_date: datetime = file_info.mtime  # type: ignore[assignment]
-
-        # Ensure it's timezone-aware and in UTC
-        if creation_date.tzinfo is None:
-            creation_date = creation_date.replace(tzinfo=UTC)
-        elif creation_date.tzinfo != UTC:
-            creation_date = creation_date.astimezone(UTC)
-
-        return creation_date
-
-    except Exception as e:
-        logger.error(f"Error getting S3 object creation date for {file_path}: {e}")
-        raise
-
-
 def backfill_parquet_file(
     parquet_filepath: str,
     dataset: ds.Dataset,
@@ -181,6 +153,34 @@ def backfill_parquet_file(
             "elapsed": time.perf_counter() - start_time,
             "dry_run": dry_run,
         }
+
+
+def get_s3_object_creation_date(file_path: str, filesystem: fs.FileSystem) -> datetime:
+    """Get the creation date of an S3 object.
+
+    Args:
+        file_path: Path to the S3 object
+        filesystem: PyArrow S3 filesystem instance
+
+    Returns:
+        datetime: Creation date of the S3 object in UTC
+    """
+    try:
+        # Get creation date of S3 object
+        file_info = filesystem.get_file_info(file_path)
+        creation_date: datetime = file_info.mtime  # type: ignore[assignment]
+
+        # Ensure it's timezone-aware and in UTC
+        if creation_date.tzinfo is None:
+            creation_date = creation_date.replace(tzinfo=UTC)
+        elif creation_date.tzinfo != UTC:
+            creation_date = creation_date.astimezone(UTC)
+
+        return creation_date
+
+    except Exception as e:
+        logger.error(f"Error getting S3 object creation date for {file_path}: {e}")
+        raise
 
 
 if __name__ == "__main__":
