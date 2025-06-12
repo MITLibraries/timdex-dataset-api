@@ -21,6 +21,7 @@ from pyarrow import fs
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.exceptions import DatasetNotLoadedError
 from timdex_dataset_api.run import TIMDEXRunManager
+from timdex_dataset_api.utils import get_batch_fragment_index
 
 if TYPE_CHECKING:
     from timdex_dataset_api.record import DatasetRecord  # pragma: nocover
@@ -483,6 +484,12 @@ class TIMDEXDataset:
             )
         dataset = self._get_filtered_dataset(**filters)
 
+        # if current records, we'll need the parquet filename for deduplication
+        if self._current_records:
+            if not columns:
+                columns = TIMDEX_DATASET_SCHEMA.names
+            columns.append("__fragment_index")
+
         batches = dataset.to_batches(
             columns=columns,
             batch_size=self.config.read_batch_size,
@@ -503,65 +510,96 @@ class TIMDEXDataset:
     ) -> Iterator[pa.RecordBatch]:
         """Method to yield only the most recent version of each record.
 
-        When multiple versions of a record (same timdex_record_id) exist in the dataset,
-        this method ensures only the most recent version is returned.  If filtering is
-        applied that removes this most recent version of a record, that timdex_record_id
-        will not be yielded at all.
+        As we move through the record batches we use a parallel iterator of unfiltered
+        batches to fill in gaps of timdex_record_ids that may have been filtered out but
+        should still be considered "seen".  Even if a timdex_record_id is not in the
+        record batch -- likely due to filtering -- we will mark that timdex_record_id as
+        "seen" and not yield it from any future batches.
 
-        This is achieved by iterating over TWO record batch iterators in parallel:
+        Because we cannot guarantee that unfiltered and filtered batches will have the
+        same number of batches, we must instead keep track of what dataset fragment we are
+        processing. As we move from one fragment to the next, we backfill all
+        timdex_record_id's from the unfiltered fragment as "seen" before beginning to
+        yield from the next fragment.
 
-            1. "batches" - the RecordBatch iterator passed to this method which
-            contains the actual records and columns we are interested in, and may contain
-            filtering
-
-            2. "unfiltered_batches" - a lightweight RecordBatch iterator that only
-            contains the 'timdex_record_id' column from a pre-filtering dataset saved
-            during .load()
-
-        These two iterators are guaranteed to have the same number of total batches based
-        on how pyarrow.Dataset.to_batches() reads from parquet files.  Even if dataset
-        filtering is applied, this does not affect the batch count; you may just end up
-        with smaller or empty batches.
-
-        As we move through the record batches we use unfiltered batches to keep a list of
-        seen timdex_record_ids.  Even if a timdex_record_is not in the record batch --
-        likely due to filtering -- we will mark that timdex_record_id as "seen" and not
-        yield it from any future batches.
+        Documentation about pyarrow dataset fragments:
+        https://arrow.apache.org/docs/cpp/api/dataset.html#_CPPv4N5arrow7dataset8FragmentE
 
         Args:
-            - batches: batches of records to actually yield from
-            - current_record_id_batches: batches of timdex_record_id's that inform when
-            to yield or skip a record for a batch
+            batches: Iterator of record batches to filter and yield from
         """
+        # get unfiltered batches with only the columns we need for deduplication
         unfiltered_batches = self._current_records_dataset.to_batches(
-            columns=["timdex_record_id"],
+            columns=["timdex_record_id", "__filename", "__fragment_index"],
             batch_size=self.config.read_batch_size,
             batch_readahead=self.config.batch_read_ahead,
             fragment_readahead=self.config.fragment_read_ahead,
         )
 
-        seen_records = set()
-        for unfiltered_batch, batch in zip(unfiltered_batches, batches, strict=True):
-            # init list of indices from the batch for records we have never yielded
-            unseen_batch_indices = []
+        # get the first unfiltered batch and its fragment index
+        try:
+            unfiltered_batch = next(unfiltered_batches)
+        except StopIteration:
+            return
 
-            # check each record id and track unseen ones
-            for i, record_id in enumerate(batch.column("timdex_record_id").to_pylist()):
-                if record_id not in seen_records:
-                    unseen_batch_indices.append(i)
+        seen_records: set[str] = set()
+        previous_fragment = 0
+        for batch in batches:
 
-            # even if not a record to yield, update our list of seen records from all
-            # records in the unfiltered batch
-            seen_records.update(unfiltered_batch.column("timdex_record_id").to_pylist())
-
-            # if no unseen records from this batch, skip yielding entirely
-            if not unseen_batch_indices:
+            if len(batch) == 0:
                 continue
 
-            # create a new RecordBatch using the unseen indices of the batch
-            _batch = batch.take(pa.array(unseen_batch_indices))  # type: ignore[arg-type]
-            if len(_batch) > 0:
-                yield _batch
+            # if the fragment has incremented, we've moved to the next fragment so we need
+            # to backfill ids from the last unfiltered fragment as seen
+            current_fragment = get_batch_fragment_index(batch)
+            if current_fragment > previous_fragment:
+                unfiltered_batch, timdex_record_ids = (
+                    self._get_previous_unfiltered_fragment_ids(  # type: ignore[assignment]
+                        current_fragment,
+                        unfiltered_batch,
+                        unfiltered_batches,
+                    )
+                )
+                seen_records.update(timdex_record_ids)
+            previous_fragment = current_fragment
+
+            # find indices of records we haven't seen yet
+            unseen_batch_indices = []
+            batch_record_ids = batch.column("timdex_record_id").to_pylist()
+            for i, record_id in enumerate(batch_record_ids):
+                if record_id not in seen_records:
+                    unseen_batch_indices.append(i)
+                    seen_records.add(record_id)  # type: ignore[arg-type]
+
+            # if we don't find any, continue with next batch
+            # else, yield a RecordBatch of the unseen records
+            if not unseen_batch_indices:
+                continue
+            yield batch.take(pa.array(unseen_batch_indices))  # type: ignore[arg-type]
+
+    def _get_previous_unfiltered_fragment_ids(
+        self,
+        target_fragment: int,
+        batch: pa.RecordBatch,
+        unfiltered_batches: Iterator[pa.RecordBatch],
+    ) -> tuple[pa.RecordBatch | None, set[str]]:
+        """Method to get all timdex_record_ids from an unfiltered fragment.
+
+        Returns:
+            tuple: [next fragment batch, previous fragment ids]
+        """
+        current_fragment = get_batch_fragment_index(batch)
+
+        timdex_record_ids: set[str] = set()
+        while current_fragment < target_fragment:
+            timdex_record_ids.update(batch.column("timdex_record_id").to_pylist())  # type: ignore[arg-type]
+            try:
+                batch = next(unfiltered_batches)
+                current_fragment = get_batch_fragment_index(batch)
+            except StopIteration:
+                return None, timdex_record_ids
+
+        return batch, timdex_record_ids
 
     def read_dataframes_iter(
         self,

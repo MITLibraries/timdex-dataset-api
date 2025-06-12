@@ -1,6 +1,9 @@
-# ruff: noqa: D205, D209, S105, S106, SLF001, PD901, PLR2004
+# ruff: noqa: D205, D209, S105, S106, SLF001, PD901, PLR2004, S311
 
+import contextlib
 import os
+import random
+import shutil
 from datetime import UTC, date, datetime
 from unittest.mock import MagicMock, patch
 
@@ -529,3 +532,76 @@ def test_dataset_load_current_records_gets_correct_same_day_daily_runs_ordering(
 
     assert first_record["run_id"] == "run-5"
     assert first_record["action"] == "delete"
+
+
+def test_dataset_current_records_graceful_handle_zero_records(local_dataset_with_runs):
+    local_dataset_with_runs.load(current_records=True, source="alma", action="error")
+    df = local_dataset_with_runs.read_dataframe()
+    assert df is None
+
+
+def test_dataset_current_records_handle_mismatched_batches_from_filtering_large_files(
+    tmp_path,
+):
+    dataset_location = str(tmp_path / "dataset")
+
+    td = TIMDEXDataset(
+        dataset_location,
+        config=TIMDEXDatasetConfig(
+            max_rows_per_file=10,
+            max_rows_per_group=2,
+        ),
+    )
+
+    # full run + daily deletes + indexing
+    td.write(generate_sample_records(21, run_type="full"))
+    td.write(generate_sample_records(11, run_type="daily", action="delete"))
+    td.write(generate_sample_records(9, run_type="daily", action="index"))
+
+    # get current records to index
+    td.load(current_records=True)
+    current_df = td.read_dataframe(action="index")
+
+    # assert correct current records
+    assert len(current_df) == 19  # 21 records - 11 delete + 9 re-indexed = 19
+    assert set(current_df.timdex_record_id).isdisjoint({"alma:9", "alma:10"})
+
+
+def test_fuzz_dataset_current_records_random_writes(tmp_path):
+    for _ in range(10):
+        dataset_location = str(tmp_path / "dataset")
+        with contextlib.suppress(FileNotFoundError):
+            shutil.rmtree(dataset_location)
+
+        max_rows_per_file = random.randint(5, 101)
+        td = TIMDEXDataset(
+            dataset_location,
+            config=TIMDEXDatasetConfig(
+                max_rows_per_file=max_rows_per_file,
+                max_rows_per_group=max_rows_per_file - 1,
+            ),
+        )
+
+        # set baseline full run
+        td.write(generate_sample_records(10, run_type="full"))
+
+        # perform a series of random runs
+        for _ in range(100):
+            num_records = random.randint(1, 100)
+            action = random.choice(["index", "delete"])
+            run_type = random.choice(["full", "daily"])
+            td.write(
+                generate_sample_records(num_records, run_type=run_type, action=action)
+            )
+
+        # assert basic integrity
+        td.load(current_records=True)
+        current_df = td.read_dataframe()
+        assert current_df.timdex_record_id.is_unique
+        assert len(current_df) <= 100
+
+        # assert action counts are accurate with and without filtering
+        current_df = td.read_dataframe()
+        action_counts = current_df.action.value_counts().to_dict()
+        for action, count in action_counts.items():
+            assert len(td.read_dataframe(action=action)) == count
