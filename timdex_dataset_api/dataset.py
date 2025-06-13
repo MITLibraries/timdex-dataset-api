@@ -488,7 +488,8 @@ class TIMDEXDataset:
         if self._current_records:
             if not columns:
                 columns = TIMDEX_DATASET_SCHEMA.names
-            columns.append("__fragment_index")
+            columns.extend(["__fragment_index", "timdex_record_id"])
+            columns = list(set(columns))
 
         batches = dataset.to_batches(
             columns=columns,
