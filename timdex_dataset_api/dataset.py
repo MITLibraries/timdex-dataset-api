@@ -423,17 +423,10 @@ class TIMDEXDataset:
         Args:
             - records_iter: Iterator of DatasetRecord instances
         """
-        run_timestamp = datetime.now(UTC)
         for i, record_batch in enumerate(
             itertools.batched(records_iter, self.config.write_batch_size)
         ):
-            record_dicts = [
-                {
-                    **record.to_dict(),
-                    "run_timestamp": run_timestamp,
-                }
-                for record in record_batch
-            ]
+            record_dicts = [record.to_dict() for record in record_batch]
             batch = pa.RecordBatch.from_pylist(record_dicts)
             logger.debug(f"Yielding batch {i + 1} for dataset writing.")
             yield batch

@@ -17,6 +17,7 @@ def generate_sample_records(
     run_type: str | None = "daily",
     action: str | None = "index",
     run_id: str | None = None,
+    run_timestamp: str | None = None,
 ) -> Iterator[DatasetRecord]:
     """Generate sample DatasetRecords."""
     if not run_id:
@@ -33,6 +34,7 @@ def generate_sample_records(
             action=action,
             run_id=run_id,
             run_record_offset=x,
+            run_timestamp=run_timestamp or run_date,
         )
 
 
