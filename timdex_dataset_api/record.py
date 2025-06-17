@@ -2,11 +2,21 @@
 
 from datetime import UTC, date, datetime
 
+import attrs
 from attrs import asdict, define, field
 
 
 def strict_date_parse(date_string: str) -> date:
     return datetime.strptime(date_string, "%Y-%m-%d").astimezone(UTC).date()
+
+
+def datetime_iso_parse(datetime_iso_string: str) -> datetime:
+    parsed_datetime = datetime.fromisoformat(datetime_iso_string)
+    # if timezone not present, set as UTC and return
+    if parsed_datetime.tzinfo is None:
+        return parsed_datetime.replace(tzinfo=UTC)
+    # else, convert to / ensure UTC and return
+    return parsed_datetime.astimezone(UTC)
 
 
 @define
@@ -26,6 +36,13 @@ class DatasetRecord:
     run_type: str = field()
     action: str = field()
     run_id: str = field()
+    run_timestamp: datetime = field(
+        converter=datetime_iso_parse,
+        default=attrs.Factory(
+            lambda self: self.run_date.isoformat(),
+            takes_self=True,
+        ),
+    )
     run_record_offset: int = field(default=None)
 
     @property

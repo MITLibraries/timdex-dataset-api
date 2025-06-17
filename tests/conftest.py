@@ -182,16 +182,16 @@ def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
     # be represented.
     run_params.extend(
         [
-            (100, "alma", "2025-01-01", "full", "index", "run-1"),
-            (75, "alma", "2025-01-01", "full", "index", "run-2"),
-            (10, "alma", "2025-01-01", "daily", "index", "run-3"),
-            (20, "alma", "2025-01-02", "daily", "index", "run-4"),
-            (5, "alma", "2025-01-02", "daily", "delete", "run-5"),
+            (100, "alma", "2025-01-01", "full", "index", "run-1", "2025-01-01T01:00:00"),
+            (75, "alma", "2025-01-01", "full", "index", "run-2", "2025-01-01T02:00:00"),
+            (10, "alma", "2025-01-01", "daily", "index", "run-3", "2025-01-01T03:00:00"),
+            (20, "alma", "2025-01-02", "daily", "index", "run-4", "2025-01-01T04:00:00"),
+            (5, "alma", "2025-01-02", "daily", "delete", "run-5", "2025-01-01T05:00:00"),
         ]
     )
 
     for params in run_params:
-        num_records, source, run_date, run_type, action, run_id = params
+        num_records, source, run_date, run_type, action, run_id, run_timestamp = params
         records = generate_sample_records(
             num_records,
             timdex_record_id_prefix=source,
@@ -200,6 +200,7 @@ def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
             run_type=run_type,
             action=action,
             run_id=run_id,
+            run_timestamp=run_timestamp,
         )
         timdex_dataset.write(records)
 
