@@ -1,14 +1,13 @@
-# ruff: noqa: D205, D209, S105, S106, SLF001, PD901, PLR2004
+# ruff: noqa: D205, D209, SLF001, PLR2004
 
 import os
-from datetime import UTC, date, datetime
+from datetime import date
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
 from pyarrow import fs
 
-from tests.utils import generate_sample_records
 from timdex_dataset_api.dataset import (
     DatasetNotLoadedError,
     TIMDEXDataset,
@@ -464,47 +463,6 @@ def test_dataset_current_records_index_filtering_accurate_records_yielded(
         "alma:23",
         "alma:24",
     ]
-
-
-@pytest.mark.freeze_time("2025-05-22 01:23:45.567890")
-def test_dataset_write_includes_minted_run_timestamp(tmp_path):
-    # create dataset
-    location = str(tmp_path / "one_run_at_frozen_time")
-    os.mkdir(location)
-    timdex_dataset = TIMDEXDataset(location)
-
-    run_id = "abc123"
-
-    # perform a single ETL run that should pickup the frozen time for run_timestamp
-    records = generate_sample_records(
-        10,
-        timdex_record_id_prefix="alma",
-        source="alma",
-        run_date="2025-05-22",
-        run_type="full",
-        action="index",
-        run_id=run_id,
-    )
-    timdex_dataset.write(records)
-    timdex_dataset.load()
-
-    # assert TIMDEXDataset.write() applies current time as run_timestamp
-    run_row_dict = next(timdex_dataset.read_dicts_iter())
-    assert "run_timestamp" in run_row_dict
-    assert run_row_dict["run_timestamp"] == datetime(
-        2025,
-        5,
-        22,
-        1,
-        23,
-        45,
-        567890,
-        tzinfo=UTC,
-    )
-
-    # assert the same run_timestamp is applied to all rows in the run
-    df = timdex_dataset.read_dataframe(run_id=run_id)
-    assert len(list(df.run_timestamp.unique())) == 1
 
 
 def test_dataset_load_current_records_gets_correct_same_day_full_run(

@@ -1,4 +1,4 @@
-# ruff: noqa: PLR2004, PD901
+# ruff: noqa: PLR2004
 
 import pandas as pd
 import pyarrow as pa

@@ -1,4 +1,4 @@
-# ruff: noqa: S105, S106, SLF001, PLR2004, PD901, D209, D205
+# ruff: noqa: PLR2004, D209, D205
 import math
 import os
 from unittest.mock import patch
