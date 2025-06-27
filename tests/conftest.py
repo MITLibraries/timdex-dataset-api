@@ -10,7 +10,7 @@ from tests.utils import (
     generate_sample_records,
     generate_sample_records_with_simulated_partitions,
 )
-from timdex_dataset_api import TIMDEXDataset
+from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
 
 
@@ -208,3 +208,8 @@ def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
     timdex_dataset.load()
 
     return timdex_dataset
+
+
+@pytest.fixture
+def timdex_dataset_metadata(dataset_with_same_day_runs):
+    return TIMDEXDatasetMetadata(timdex_dataset=dataset_with_same_day_runs)
