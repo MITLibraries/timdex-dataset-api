@@ -500,7 +500,9 @@ class TIMDEXDataset:
         applied that removes this most recent version of a record, that timdex_record_id
         will not be yielded at all.
 
-        # TODO: update docstring....again...
+        This method uses TIMDEXDatasetMetadata to provide a mapping of timdex_record_id to
+        run_id for the current ETL run for that record.  While yielding records, only when
+        the timdex_record_id + run_id match the mapping is a record yielded.
 
         Args:
             - batches: batches of records to actually yield from
