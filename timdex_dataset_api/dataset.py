@@ -285,11 +285,23 @@ class TIMDEXDataset:
 
     @staticmethod
     def get_s3_filesystem() -> fs.FileSystem:
-        """Instantiate a pyarrow S3 Filesystem for dataset loading."""
+        """Instantiate a pyarrow S3 Filesystem for dataset loading.
+
+        If the env var 'MINIO_S3_ENDPOINT_URL' is present, assume a local MinIO S3
+        instance and configure accordingly, otherwise assume normal AWS S3.
+        """
         session = boto3.session.Session()
         credentials = session.get_credentials()
         if not credentials:
             raise RuntimeError("Could not locate AWS credentials")
+
+        if os.getenv("MINIO_S3_ENDPOINT_URL"):
+            return fs.S3FileSystem(
+                access_key=os.environ["MINIO_USERNAME"],
+                secret_key=os.environ["MINIO_PASSWORD"],
+                endpoint_override=os.environ["MINIO_S3_ENDPOINT_URL"],
+            )
+
         return fs.S3FileSystem(
             secret_key=credentials.secret_key,
             access_key=credentials.access_key,

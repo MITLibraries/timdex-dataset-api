@@ -45,7 +45,30 @@ None at this time.
 ```shell
 TDA_LOG_LEVEL=# log level for timdex-dataset-api, accepts [DEBUG, INFO, WARNING, ERROR], default INFO
 WARNING_ONLY_LOGGERS=# Comma-seperated list of logger names to set as WARNING only, e.g. 'botocore,charset_normalizer,smart_open'
+
+MINIO_S3_ENDPOINT_URL=# If set, informs the library to use this Minio S3 instance.  Requires the http(s):// protocol. 
+MINIO_USERNAME=# Username / AWS Key for Minio; required when MINIO_S3_ENDPOINT_URL is set
+MINIO_PASSWORD=# Pasword / AWS Secret for Minio; required when MINIO_S3_ENDPOINT_URL is set
+MINIO_DATA=# Path to persist MinIO data if started via Makefile command 
 ```
+
+## Local S3 via MinIO
+
+Set env vars:
+```shell
+MINIO_S3_ENDPOINT_URL=http://localhost:9000
+MINIO_USERNAME="admin"
+MINIO_PASSWORD="password"
+MINIO_DATA=<path to persist MinIO data, e.g. /tmp/minio>
+```
+
+Use a `Makefile` command that will start a MinIO instance:
+
+```shell
+make minio-start
+```
+
+With the env var `MINIO_S3_ENDPOINT_URL` set, this library will configure `pyarrow` and DuckDB connections to point at this local MinIO S3 instance.
 
 ## Usage
 
