@@ -21,6 +21,7 @@ def _test_env(monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "fake_secret_key")
     monkeypatch.setenv("AWS_SESSION_TOKEN", "fake_session_token")
     monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
+    monkeypatch.delenv("MINIO_S3_ENDPOINT_URL", raising=False)
 
 
 @pytest.fixture

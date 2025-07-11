@@ -1,7 +1,9 @@
 """timdex_dataset_api/metadata.py"""
 
+import os
 import time
 from typing import TYPE_CHECKING, Unpack
+from urllib.parse import urlparse
 
 import duckdb
 
@@ -87,8 +89,8 @@ class TIMDEXDatasetMetadata:
         # bump threads for high parallelization of lightweight data calls for metadata
         self.set_database_thread_usage(64)
 
-        # setup AWS credentials chain
-        self._create_aws_credential_chain()
+        # configure s3 connection
+        self._configure_s3_connection()
 
         # create a table of metadata about all rows in dataset
         self._create_full_dataset_table()
@@ -101,21 +103,37 @@ class TIMDEXDatasetMetadata:
             f"path: '{self.db_path}'"
         )
 
-    def _create_aws_credential_chain(self) -> None:
-        """Setup AWS credentials chain in database connection.
+    def _configure_s3_connection(self) -> None:
+        """Configure S3 connection for DuckDB access.
 
-        https://duckdb.org/docs/stable/core_extensions/aws.html
+        If the env var 'MINIO_S3_ENDPOINT_URL' is present, assume a local MinIO S3
+        instance and configure accordingly, otherwise assume normal AWS S3 and setup a
+        credentials chain in DuckDB.
         """
-        logger.info("setting up AWS credentials chain")
-        query = """
-        create or replace secret secret (
-            type s3,
-            provider credential_chain,
-            chain 'sso;env;config',
-            refresh true
-        );
-        """
-        self.conn.execute(query)
+        logger.info("configuring S3 connection")
+
+        if os.getenv("MINIO_S3_ENDPOINT_URL"):
+            self.conn.execute(
+                f"""
+            PRAGMA s3_endpoint='{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}';
+            PRAGMA s3_access_key_id='{os.environ["MINIO_USERNAME"]}';
+            PRAGMA s3_secret_access_key='{os.environ["MINIO_PASSWORD"]}';
+            PRAGMA s3_use_ssl=false;
+            PRAGMA s3_url_style='path';
+            """
+            )
+
+        else:
+            self.conn.execute(
+                """
+            create or replace secret secret (
+                type s3,
+                provider credential_chain,
+                chain 'sso;env;config',
+                refresh true
+            );
+            """
+            )
 
     def _create_full_dataset_table(self) -> None:
         """Create a table of metadata about all records in the parquet dataset.

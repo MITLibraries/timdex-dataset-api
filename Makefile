@@ -1,3 +1,5 @@
+-include .env
+
 SHELL=/bin/bash
 DATETIME:=$(shell date -u +%Y%m%dT%H%M%SZ)
 
@@ -54,3 +56,16 @@ black-apply: # Apply changes with 'black'
 
 ruff-apply: # Resolve 'fixable errors' with 'ruff'
 	pipenv run ruff check --fix .
+
+
+######################
+# Minio S3 Instance
+######################
+minio-start:
+	docker run \
+   -p 9000:9000 \
+   -p 9001:9001 \
+   -v $(MINIO_DATA):/data \
+   -e "MINIO_ROOT_USER=$(MINIO_USERNAME)" \
+   -e "MINIO_ROOT_PASSWORD=$(MINIO_PASSWORD)" \
+   quay.io/minio/minio server /data --console-address ":9001"
