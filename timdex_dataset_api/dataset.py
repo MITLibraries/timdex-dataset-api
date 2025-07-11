@@ -128,7 +128,7 @@ class TIMDEXDataset:
 
         # reading
         self._current_records: bool = False
-        self.timdex_dataset_metadata: TIMDEXDatasetMetadata = None  # type: ignore[assignment]
+        self.metadata: TIMDEXDatasetMetadata = None  # type: ignore[assignment]
 
     @property
     def row_count(self) -> int:
@@ -173,8 +173,8 @@ class TIMDEXDataset:
         # read dataset metadata if only current records are requested
         self._current_records = current_records
         if current_records:
-            self.timdex_dataset_metadata = TIMDEXDatasetMetadata(timdex_dataset=self)
-            self.paths = self.timdex_dataset_metadata.get_current_parquet_files(**filters)
+            self.metadata = TIMDEXDatasetMetadata(timdex_dataset=self)
+            self.paths = self.metadata.get_current_parquet_files(**filters)
 
         # perform initial load of full dataset
         self.dataset = self._load_pyarrow_dataset()
@@ -521,9 +521,7 @@ class TIMDEXDataset:
             - filters: pairs of column:value to filter the dataset metadata required
         """
         # get map of timdex_record_id to run_id for current version of that record
-        record_to_run_map = self.timdex_dataset_metadata.get_current_record_to_run_map(
-            **filters
-        )
+        record_to_run_map = self.metadata.get_current_record_to_run_map(**filters)
 
         # loop through batches, yielding only current records
         for batch in batches:
