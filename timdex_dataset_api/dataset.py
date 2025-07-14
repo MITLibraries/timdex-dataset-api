@@ -128,7 +128,7 @@ class TIMDEXDataset:
 
         # reading
         self._current_records: bool = False
-        self.timdex_dataset_metadata: TIMDEXDatasetMetadata = None  # type: ignore[assignment]
+        self.metadata: TIMDEXDatasetMetadata = None  # type: ignore[assignment]
 
     @property
     def row_count(self) -> int:
@@ -173,8 +173,8 @@ class TIMDEXDataset:
         # read dataset metadata if only current records are requested
         self._current_records = current_records
         if current_records:
-            self.timdex_dataset_metadata = TIMDEXDatasetMetadata(timdex_dataset=self)
-            self.paths = self.timdex_dataset_metadata.get_current_parquet_files(**filters)
+            self.metadata = TIMDEXDatasetMetadata(timdex_dataset=self)
+            self.paths = self.metadata.get_current_parquet_files(**filters)
 
         # perform initial load of full dataset
         self.dataset = self._load_pyarrow_dataset()
@@ -285,11 +285,23 @@ class TIMDEXDataset:
 
     @staticmethod
     def get_s3_filesystem() -> fs.FileSystem:
-        """Instantiate a pyarrow S3 Filesystem for dataset loading."""
+        """Instantiate a pyarrow S3 Filesystem for dataset loading.
+
+        If the env var 'MINIO_S3_ENDPOINT_URL' is present, assume a local MinIO S3
+        instance and configure accordingly, otherwise assume normal AWS S3.
+        """
         session = boto3.session.Session()
         credentials = session.get_credentials()
         if not credentials:
             raise RuntimeError("Could not locate AWS credentials")
+
+        if os.getenv("MINIO_S3_ENDPOINT_URL"):
+            return fs.S3FileSystem(
+                access_key=os.environ["MINIO_USERNAME"],
+                secret_key=os.environ["MINIO_PASSWORD"],
+                endpoint_override=os.environ["MINIO_S3_ENDPOINT_URL"],
+            )
+
         return fs.S3FileSystem(
             secret_key=credentials.secret_key,
             access_key=credentials.access_key,
@@ -509,9 +521,7 @@ class TIMDEXDataset:
             - filters: pairs of column:value to filter the dataset metadata required
         """
         # get map of timdex_record_id to run_id for current version of that record
-        record_to_run_map = self.timdex_dataset_metadata.get_current_record_to_run_map(
-            **filters
-        )
+        record_to_run_map = self.metadata.get_current_record_to_run_map(**filters)
 
         # loop through batches, yielding only current records
         for batch in batches:
