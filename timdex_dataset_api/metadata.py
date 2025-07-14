@@ -115,24 +115,28 @@ class TIMDEXDatasetMetadata:
         if os.getenv("MINIO_S3_ENDPOINT_URL"):
             self.conn.execute(
                 f"""
-            PRAGMA s3_endpoint='{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}';
-            PRAGMA s3_access_key_id='{os.environ["MINIO_USERNAME"]}';
-            PRAGMA s3_secret_access_key='{os.environ["MINIO_PASSWORD"]}';
-            PRAGMA s3_use_ssl=false;
-            PRAGMA s3_url_style='path';
-            """
+                create or replace secret minio_s3_secret (
+                    type s3,
+                    endpoint '{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}',
+                    key_id '{os.environ["MINIO_USERNAME"]}',
+                    secret '{os.environ["MINIO_PASSWORD"]}',
+                    region 'us-east-1',
+                    url_style 'path',
+                    use_ssl false
+                );
+                """
             )
 
         else:
             self.conn.execute(
                 """
-            create or replace secret secret (
-                type s3,
-                provider credential_chain,
-                chain 'sso;env;config',
-                refresh true
-            );
-            """
+                create or replace secret aws_s3_secret (
+                    type s3,
+                    provider credential_chain,
+                    chain 'sso;env;config',
+                    refresh true
+                );
+                """
             )
 
     def _create_full_dataset_table(self) -> None:
