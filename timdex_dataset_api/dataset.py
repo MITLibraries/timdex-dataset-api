@@ -4,7 +4,10 @@ import itertools
 import json
 import operator
 import os
+from fileinput import filename
+from pathlib import Path
 import time
+from urllib.parse import urlparse
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
@@ -16,6 +19,7 @@ import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
@@ -105,42 +109,88 @@ class TIMDEXDataset:
 
     def __init__(
         self,
-        location: str | list[str],
+        location: str,
         config: TIMDEXDatasetConfig | None = None,
     ):
         """Initialize TIMDEXDataset object.
 
         Args:
-            location (str | list[str]): Local filesystem path or an S3 URI to
-                a parquet dataset. For partitioned datasets, set to the base directory.
+            location (str): Local filesystem path or an S3 URI to
+                ETL dataset root.
         """
         self.config = config or TIMDEXDatasetConfig()
         self.location = location
 
         # pyarrow dataset
-        self.filesystem, self.paths = self.parse_location(self.location)
+        self.filesystem, self.paths = self.parse_location(self.records_location)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
 
-        # writing
-        self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
+        self.metadata = TIMDEXDatasetMetadata(self.location)
 
         # reading
         self._current_records: bool = False
-        self.metadata: TIMDEXDatasetMetadata = None  # type: ignore[assignment]
+
+    @classmethod
+    def parse_location(cls, location: str) -> tuple[fs.FileSystem, str]:
+        """Parse and return the filesystem and normalized location."""
+        location_parts = urlparse(location)
+        if location_parts.scheme == "s3":
+            filesystem = TIMDEXDataset._get_s3_filesystem()
+            path = str(
+                Path(location_parts.netloc) / Path(location_parts.path.removeprefix("/"))
+            )
+        else:
+            filesystem = fs.LocalFileSystem()
+            path = location
+        return filesystem, path
 
     @property
-    def row_count(self) -> int:
-        """Get row count from loaded dataset."""
-        if not self.dataset:
-            raise DatasetNotLoadedError
-        return self.dataset.count_rows()
+    def records_location(self):
+        return f"{self.location}/data/records"
+
+    @staticmethod
+    def _get_s3_filesystem() -> fs.FileSystem:
+        """Instantiate a pyarrow S3 Filesystem for dataset loading.
+
+        If the env var 'MINIO_S3_ENDPOINT_URL' is present, assume a local MinIO S3
+        instance and configure accordingly, otherwise assume normal AWS S3.
+        """
+        if os.getenv("MINIO_S3_ENDPOINT_URL"):
+            return fs.S3FileSystem(
+                access_key=os.environ["MINIO_USERNAME"],
+                secret_key=os.environ["MINIO_PASSWORD"],
+                endpoint_override=os.environ["MINIO_S3_ENDPOINT_URL"],
+            )
+
+        session = boto3.session.Session()
+        credentials = session.get_credentials()
+        if not credentials:
+            raise RuntimeError("Could not locate AWS credentials")
+
+        return fs.S3FileSystem(
+            secret_key=credentials.secret_key,
+            access_key=credentials.access_key,
+            region=session.region_name,
+            session_token=credentials.token,
+        )
+
+    def _load_pyarrow_dataset(self) -> ds.Dataset:
+        """Load the pyarrow dataset per local filesystem and paths attributes."""
+        return ds.dataset(
+            self.paths,
+            schema=self.schema,
+            format="parquet",
+            partitioning="hive",
+            filesystem=self.filesystem,
+        )
 
     def load(
         self,
         *,
         current_records: bool = False,
+        include_parquet_files: list[str] | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> None:
         """Lazy load a pyarrow.dataset.Dataset and set to self.dataset.
@@ -167,16 +217,21 @@ class TIMDEXDataset:
         """
         start_time = time.perf_counter()
 
-        # reset paths from original location before load
-        _, self.paths = self.parse_location(self.location)
-
-        # read dataset metadata if only current records are requested
         self._current_records = current_records
-        if current_records:
-            self.metadata = TIMDEXDatasetMetadata(timdex_dataset=self)
-            self.paths = self.metadata.get_current_parquet_files(**filters)
 
-        # perform initial load of full dataset
+        # TODO: revisit, but probably good logic to have
+        # limit to current parquet files
+        if current_records:
+            self.paths = self.metadata.get_current_parquet_files(**filters)
+            # use explicit list of parquet files
+        # NOTE: this opens the door for a metadata query to provide an explicit list...
+        elif include_parquet_files:
+            self.paths = include_parquet_files
+        # reset paths from original location before load
+        else:
+            _, self.paths = self.parse_location(self.records_location)
+
+        # load pyarrow dataset of records
         self.dataset = self._load_pyarrow_dataset()
 
         # filter dataset
@@ -184,17 +239,7 @@ class TIMDEXDataset:
 
         logger.info(
             f"Dataset successfully loaded: '{self.location}', "
-            f"{round(time.perf_counter()-start_time, 2)}s"
-        )
-
-    def _load_pyarrow_dataset(self) -> ds.Dataset:
-        """Load the pyarrow dataset per local filesystem and paths attributes."""
-        return ds.dataset(
-            self.paths,
-            schema=self.schema,
-            format="parquet",
-            partitioning="hive",
-            filesystem=self.filesystem,
+            f"{round(time.perf_counter() - start_time, 2)}s"
         )
 
     def _get_filtered_dataset(
@@ -283,82 +328,12 @@ class TIMDEXDataset:
             "day": run_date_obj.strftime("%d"),
         }
 
-    @staticmethod
-    def get_s3_filesystem() -> fs.FileSystem:
-        """Instantiate a pyarrow S3 Filesystem for dataset loading.
-
-        If the env var 'MINIO_S3_ENDPOINT_URL' is present, assume a local MinIO S3
-        instance and configure accordingly, otherwise assume normal AWS S3.
-        """
-        session = boto3.session.Session()
-        credentials = session.get_credentials()
-        if not credentials:
-            raise RuntimeError("Could not locate AWS credentials")
-
-        if os.getenv("MINIO_S3_ENDPOINT_URL"):
-            return fs.S3FileSystem(
-                access_key=os.environ["MINIO_USERNAME"],
-                secret_key=os.environ["MINIO_PASSWORD"],
-                endpoint_override=os.environ["MINIO_S3_ENDPOINT_URL"],
-            )
-
-        return fs.S3FileSystem(
-            secret_key=credentials.secret_key,
-            access_key=credentials.access_key,
-            region=session.region_name,
-            session_token=credentials.token,
-        )
-
-    @classmethod
-    def parse_location(
-        cls,
-        location: str | list[str],
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Parse and return the filesystem and normalized source location(s).
-
-        Handles both single location strings and lists of Parquet file paths.
-        """
-        match location:
-            case str():
-                return cls._parse_single_location(location)
-            case list():
-                return cls._parse_multiple_locations(location)
-            case _:
-                raise TypeError("Location type must be str or list[str].")
-
-    @classmethod
-    def _parse_single_location(
-        cls, location: str
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Get filesystem and normalized location for single location."""
-        if location.startswith("s3://"):
-            filesystem = TIMDEXDataset.get_s3_filesystem()
-            source = location.removeprefix("s3://")
-        else:
-            filesystem = fs.LocalFileSystem()
-            source = location
-        return filesystem, source
-
-    @classmethod
-    def _parse_multiple_locations(
-        cls, location: list[str]
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Get filesystem and normalized location for multiple locations."""
-        if all(loc.startswith("s3://") for loc in location):
-            filesystem = TIMDEXDataset.get_s3_filesystem()
-            source = [loc.removeprefix("s3://") for loc in location]
-        elif all(not loc.startswith("s3://") for loc in location):
-            filesystem = fs.LocalFileSystem()
-            source = location
-        else:
-            raise ValueError("Mixed S3 and local paths are not supported.")
-        return filesystem, source
-
     def write(
         self,
         records_iter: Iterator["DatasetRecord"],
         *,
         use_threads: bool = True,
+        write_metadata: bool = True,
     ) -> list[ds.WrittenFile]:
         """Write records to the TIMDEX parquet dataset.
 
@@ -383,23 +358,19 @@ class TIMDEXDataset:
             - use_threads: boolean if threads should be used for writing
         """
         start_time = time.perf_counter()
-        self._written_files = []
+        written_files: list[ds.WrittenFile] = []
 
-        dataset_filesystem, dataset_path = self.parse_location(self.location)
-        if isinstance(dataset_path, list):
-            raise TypeError(
-                "Dataset location must be the root of a single dataset for writing"
-            )
+        filesystem, dataset_records_path = self.parse_location(self.records_location)
 
         record_batches_iter = self.create_record_batches(records_iter)
 
         ds.write_dataset(
             record_batches_iter,
-            base_dir=dataset_path,
+            base_dir=dataset_records_path,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
             existing_data_behavior="overwrite_or_ignore",
-            filesystem=dataset_filesystem,
-            file_visitor=lambda written_file: self._written_files.append(written_file),  # type: ignore[arg-type]
+            filesystem=filesystem,
+            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
             max_open_files=500,
             max_rows_per_file=self.config.max_rows_per_file,
@@ -410,8 +381,61 @@ class TIMDEXDataset:
             use_threads=use_threads,
         )
 
-        self.log_write_statistics(start_time)
-        return self._written_files  # type: ignore[return-value]
+        self.log_write_statistics(start_time, written_files)
+
+        # TODO: temporary shim for development work, but maybe decent option?
+        if write_metadata:
+            # TODO: newly added, revisit implementation
+            self.write_metadata_append_deltas(written_files)
+
+            # TODO: also feels clunky
+            self.metadata.refresh()
+
+        return written_files
+
+    # TODO: newly added, revisit implementation
+    # QUESTION: should this be a responsibility of the metadata class?
+    # NOTE: there should be a method dedicated to a *single* ETL parquet file
+    #   this could be handy for writing deltas after an ETL run if missed
+    def write_metadata_append_deltas(self, written_files: list):
+        for written_file in written_files:
+            filepath = written_file.path
+            self.write_append_delta_for_etl_parquet_file(filepath)
+
+    def write_append_delta_for_etl_parquet_file(self, filepath: str):
+        logger.info(f"Writing append delta for new parquet file: {filepath}")
+        filesystem, _ = self.parse_location(self.records_location)
+        metadata_columns = [
+            "timdex_record_id",
+            "source",
+            "run_date",
+            "run_type",
+            "action",
+            "run_id",
+            "run_record_offset",
+            "run_timestamp",
+        ]
+        table = pq.read_table(
+            filepath,
+            filesystem=filesystem,
+            columns=metadata_columns,
+        )
+
+        new_array = pa.array([filepath] * table.num_rows)
+        table = table.append_column("filename", new_array)
+
+        output_path = (
+            f"{self.metadata.append_deltas_path.removeprefix('s3://')}/"
+            f"append_delta-{filepath.split('/')[-1]}"
+        )
+
+        # TODO: works, but clunky
+        components = urlparse(self.metadata.append_deltas_path)
+        if components.scheme != "s3":
+            if not os.path.exists(self.metadata.append_deltas_path):
+                os.mkdir(self.metadata.append_deltas_path)
+
+        pq.write_table(table, output_path, filesystem=filesystem)
 
     def create_record_batches(
         self, records_iter: Iterator["DatasetRecord"]
@@ -434,19 +458,18 @@ class TIMDEXDataset:
             logger.debug(f"Yielding batch {i + 1} for dataset writing.")
             yield batch
 
-    def log_write_statistics(self, start_time: float) -> None:
+    def log_write_statistics(
+        self,
+        start_time: float,
+        written_files: list[ds.WrittenFile],
+    ) -> None:
         """Parse written files from write and log statistics."""
         total_time = round(time.perf_counter() - start_time, 2)
-        total_files = len(self._written_files)
+        total_files = len(written_files)
         total_rows = sum(
-            [
-                wf.metadata.num_rows  # type: ignore[attr-defined]
-                for wf in self._written_files
-            ]
+            [wf.metadata.num_rows for wf in written_files]  # type: ignore[attr-defined]
         )
-        total_size = sum(
-            [wf.size for wf in self._written_files]  # type: ignore[attr-defined]
-        )
+        total_size = sum([wf.size for wf in written_files])  # type: ignore[attr-defined]
         logger.info(
             f"Dataset write complete - elapsed: "
             f"{total_time}s, "

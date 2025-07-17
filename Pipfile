@@ -25,6 +25,7 @@ pytest = "*"
 ruff = "*"
 setuptools = "*"
 pip-audit = "*"
+marimo = "*"
 
 [requires]
 python_version = "3.12"

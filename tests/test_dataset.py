@@ -263,7 +263,7 @@ def test_dataset_get_filtered_dataset_with_run_date_invalid_raise_error(
 
 def test_dataset_get_s3_filesystem_success(mocker):
     mocked_s3_filesystem = mocker.spy(fs, "S3FileSystem")
-    s3_filesystem = TIMDEXDataset.get_s3_filesystem()
+    s3_filesystem = TIMDEXDataset._get_s3_filesystem()
 
     assert mocked_s3_filesystem.call_args[1] == {
         "secret_key": "fake_secret_key",

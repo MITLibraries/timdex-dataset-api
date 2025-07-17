@@ -161,3 +161,4 @@ cython_debug/
 .vscode
 
 output/
+__marimo__/
