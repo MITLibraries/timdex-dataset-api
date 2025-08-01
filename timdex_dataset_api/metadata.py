@@ -381,7 +381,7 @@ class TIMDEXDatasetMetadata:
             # download metadata file
             s3_client.download_file(self.metadata_database_path, temp_path)
 
-            # attach templ, local DB
+            # attach temp, local DB
             self.conn.execute(f"""ATTACH '{temp_path}' as temp_local_db;""")
 
             # insert all data from append_deltas

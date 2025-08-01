@@ -16,6 +16,7 @@ from functools import reduce
 from typing import TYPE_CHECKING, TypedDict, Unpack
 
 import boto3
+import duckdb
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
@@ -103,6 +104,7 @@ class TIMDEXDatasetConfig:
     fragment_read_ahead: int = field(
         default_factory=lambda: int(os.getenv("TDA_FRAGMENT_READ_AHEAD", "0"))
     )
+    duckdb_join_batch_size: int = 100_000  # TODO: consider env var?
 
 
 class TIMDEXDataset:
@@ -220,6 +222,7 @@ class TIMDEXDataset:
         self._current_records = current_records
 
         # TODO: revisit, but probably good logic to have
+        # NOTE/BUG: what if we want current + explicit list?
         # limit to current parquet files
         if current_records:
             self.paths = self.metadata.get_current_parquet_files(**filters)
@@ -642,3 +645,92 @@ class TIMDEXDataset:
         ):
             if transformed_record := record_dict["transformed_record"]:
                 yield json.loads(transformed_record)
+
+    # DEBUG ---------------------------------------------------
+    # DEBUG: Experimental pure DuckDB for query + retrieval
+    # DEBUG ---------------------------------------------------
+    def read_sql_batches_iter(self, sql: str):
+        conn = self.metadata.conn
+
+        # set connection configs
+        # TODO: set by self.config
+        conn.execute(
+            f"""
+            set enable_external_file_cache = false;
+            set memory_limit = '4GB';
+            set threads = 4;
+            set preserve_insertion_order=false;
+            """
+        )
+
+        # prepare query
+        sql = sql.replace(";", "")
+
+        # add ordering
+        # TODO: would need to remove other ordering if present...
+        sql += " order by filename, run_record_offset"
+
+        # get metadata results
+        meta_df = conn.query(sql).to_df()
+
+        # raise error if required columns not present
+        required_columns = {"timdex_record_id", "run_id", "run_record_offset", "filename"}
+        if set(meta_df.columns) <= required_columns:
+            raise ValueError(f"Missing one or more required columns: {required_columns}")
+
+        # loop through metadata chunks and perform data query
+        total_time = time.perf_counter()
+        total_yield_count = 0
+        for chunk in range(0, len(meta_df), self.config.duckdb_join_batch_size):
+            batch_time = time.perf_counter()
+            batch_yield_count = 0
+            chunk_df = meta_df[chunk : chunk + self.config.duckdb_join_batch_size]
+
+            # register
+            conn.register("metadata_chunk", chunk_df)
+
+            # build data query
+            file_list = chunk_df["filename"].unique()
+            parquet_list_sql = (
+                "["
+                + ",".join(f"'s3://{f.removeprefix("s3://")}'" for f in file_list)
+                + "]"
+            )
+            rro_list_sql = ",".join(
+                str(rro) for rro in chunk_df["run_record_offset"].unique()
+            )
+            join_cols_sql = ",".join(["timdex_record_id", "run_id", "run_record_offset"])
+            data_query = f"""
+            select
+                ds.*
+            from read_parquet(
+                {parquet_list_sql},
+                hive_partitioning=true,
+                filename=true
+            ) as ds
+            inner join metadata_chunk mc using ({join_cols_sql})
+            where ds.run_record_offset in ({rro_list_sql})
+            """
+
+            # stream batch results
+            for batch in conn.execute(data_query).fetch_record_batch(
+                rows_per_batch=self.config.read_batch_size
+            ):
+                total_yield_count += len(batch)
+                batch_yield_count += len(batch)
+                yield batch
+            conn.unregister("meta_chunk")
+
+            batch_rps = round(batch_yield_count / (time.perf_counter() - batch_time), 3)
+            logger.debug(
+                f"DuckDB read - batch yielded: {batch_yield_count} "
+                f"@ {batch_rps} records/second, total yielded: {total_yield_count}"
+            )
+
+    def read_sql_dataframe(self, sql: str) -> pd.DataFrame | None:
+        df_batches = [
+            record_batch.to_pandas() for record_batch in self.read_sql_batches_iter(sql)
+        ]
+        if not df_batches:
+            return None
+        return pd.concat(df_batches)
