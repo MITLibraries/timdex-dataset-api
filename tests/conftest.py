@@ -62,7 +62,6 @@ def fixed_local_dataset(tmp_path) -> TIMDEXDataset:
         timdex_dataset.write(
             generate_sample_records(
                 num_records=1_000,
-                timdex_record_id_prefix=source,
                 source=source,
                 run_date="2024-12-01",
                 run_id=run_id,
@@ -78,19 +77,6 @@ def sample_records_iter():
 
     def _records_iter(num_records):
         return generate_sample_records(num_records)
-
-    return _records_iter
-
-
-@pytest.fixture
-def sample_records_iter_without_partitions():
-    """Simulates an iterator of X number of DatasetRecord instances WITHOUT partition
-    values included."""
-
-    def _records_iter(num_records):
-        return generate_sample_records(
-            num_records, run_date="invalid run-date", year=None, month=None, day=None
-        )
 
     return _records_iter
 
@@ -139,7 +125,6 @@ def dataset_with_runs_location(tmp_path) -> str:
         num_records, source, run_date, run_type, action, run_id = params
         records = generate_sample_records(
             num_records,
-            timdex_record_id_prefix=source,
             source=source,
             run_date=run_date,
             run_type=run_type,
@@ -195,7 +180,6 @@ def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
         num_records, source, run_date, run_type, action, run_id, run_timestamp = params
         records = generate_sample_records(
             num_records,
-            timdex_record_id_prefix=source,
             source=source,
             run_date=run_date,
             run_type=run_type,
