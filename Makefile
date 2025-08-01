@@ -63,9 +63,10 @@ ruff-apply: # Resolve 'fixable errors' with 'ruff'
 ######################
 minio-start:
 	docker run \
-   -p 9000:9000 \
-   -p 9001:9001 \
-   -v $(MINIO_DATA):/data \
-   -e "MINIO_ROOT_USER=$(MINIO_USERNAME)" \
-   -e "MINIO_ROOT_PASSWORD=$(MINIO_PASSWORD)" \
-   quay.io/minio/minio server /data --console-address ":9001"
+	-d \
+	-p 9000:9000 \
+	-p 9001:9001 \
+	-v $(MINIO_DATA):/data \
+	-e "MINIO_ROOT_USER=$(MINIO_USERNAME)" \
+	-e "MINIO_ROOT_PASSWORD=$(MINIO_PASSWORD)" \
+	quay.io/minio/minio server /data --console-address ":9001"
