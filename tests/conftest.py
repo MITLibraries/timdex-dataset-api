@@ -1,7 +1,5 @@
 """tests/conftest.py"""
 
-# ruff: noqa: D205, D209
-
 import os
 
 import pytest
