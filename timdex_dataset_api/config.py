@@ -33,5 +33,8 @@ def configure_logger(
 
 def configure_dev_logger() -> logging.Logger:
     """Invoke to setup DEBUG level console logging for development work."""
-    logging.basicConfig(level=logging.DEBUG)
-    return configure_logger(__name__)
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.WARNING)
+    logger = logging.getLogger("timdex_dataset_api")
+    logger.setLevel(logging.DEBUG)
+    return logger
