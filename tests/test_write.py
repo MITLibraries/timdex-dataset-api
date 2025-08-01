@@ -98,9 +98,7 @@ def test_dataset_write_partition_for_multiple_sources(
 
     # perform write for source="libguides" and run_date="2024-12-01"
     written_files_source_b = new_local_dataset.write(
-        generate_sample_records(
-            num_records=7, timdex_record_id_prefix="libguides", source="libguides"
-        )
+        generate_sample_records(num_records=7, source="libguides")
     )
     new_local_dataset.load()
 
