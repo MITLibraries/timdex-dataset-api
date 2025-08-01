@@ -1,9 +1,9 @@
 """tests/conftest.py"""
 
-# ruff: noqa: D205, D209
-
 import os
 
+import boto3
+import moto
 import pytest
 
 from tests.utils import (
@@ -198,3 +198,16 @@ def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
 @pytest.fixture
 def timdex_dataset_metadata(dataset_with_same_day_runs):
     return TIMDEXDatasetMetadata(timdex_dataset=dataset_with_same_day_runs)
+
+
+@pytest.fixture
+def timdex_bucket():
+    return "timdex"
+
+
+@pytest.fixture
+def mock_s3_resource(timdex_bucket):
+    with moto.mock_aws():
+        conn = boto3.resource("s3", region_name="us-east-1")
+        conn.create_bucket(Bucket=timdex_bucket)
+        yield conn
