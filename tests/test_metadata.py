@@ -39,51 +39,14 @@ def test_tdm_get_duckdb_connection(timdex_dataset_metadata):
     assert isinstance(conn, duckdb.DuckDBPyConnection)
 
 
-def test_tdm_set_threads(timdex_dataset_metadata):
-    # set to 64
-    timdex_dataset_metadata.set_database_thread_usage(64)
-    sixty_four_thread_count = timdex_dataset_metadata.conn.query(
-        """SELECT current_setting('threads');"""
-    ).fetchone()[0]
-    assert sixty_four_thread_count == 64
-
-    # set to 12
-    timdex_dataset_metadata.set_database_thread_usage(12)
-    sixty_four_thread_count = timdex_dataset_metadata.conn.query(
-        """SELECT current_setting('threads');"""
-    ).fetchone()[0]
-    assert sixty_four_thread_count == 12
+def test_tdm_connection_has_static_database_attached(timdex_dataset_metadata):
+    assert set(
+        timdex_dataset_metadata.conn.query("""show databases;""").to_df().database_name
+    ) == {"memory", "static_db"}
 
 
-def test_tdm_init_sets_up_database(timdex_dataset_metadata):
-    df = timdex_dataset_metadata.conn.query("show tables;").to_df()
-    assert set(df.name) == {"current_records", "records"}
-
-
-def test_tdm_get_current_parquet_files(timdex_dataset_metadata):
-    parquet_files = timdex_dataset_metadata.get_current_parquet_files()
-    # assert 5 total parquet files in dataset
-    # but only 3 contain current records
-    assert len(timdex_dataset_metadata.timdex_dataset.dataset.files) == 5
-    assert len(parquet_files) == 3
-
-
-def test_tdm_get_record_to_run_mapping(timdex_dataset_metadata):
-    record_map = timdex_dataset_metadata.get_current_record_to_run_map()
-
-    assert len(record_map) == 75
-    assert record_map["alma:0"] == "run-5"
-    assert record_map["alma:5"] == "run-4"
-    assert record_map["alma:19"] == "run-4"
-    assert "run-3" not in record_map.values()
-    assert record_map["alma:20"] == "run-2"
-
-
-def test_tdm_current_records_subset_of_all_records(timdex_dataset_metadata):
-    records_df = timdex_dataset_metadata.conn.query("select * from records;").to_df()
-    current_records_df = timdex_dataset_metadata.conn.query(
-        "select * from current_records;"
+def test_tdm_connection_static_database_records_table_exists(timdex_dataset_metadata):
+    records_df = timdex_dataset_metadata.conn.query(
+        """select * from static_db.records;"""
     ).to_df()
-    assert set(current_records_df.timdex_record_id).issubset(
-        set(records_df.timdex_record_id)
-    )
+    assert len(records_df) > 0
