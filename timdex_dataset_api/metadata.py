@@ -1,9 +1,11 @@
 """timdex_dataset_api/metadata.py"""
 
 import os
+import shutil
 import tempfile
 import time
 from pathlib import Path
+from typing import Literal
 from urllib.parse import urlparse
 
 import duckdb
@@ -42,6 +44,15 @@ class TIMDEXDatasetMetadata:
         self.conn: None | DuckDBPyConnection = self.setup_duckdb_context()
 
     @property
+    def location_scheme(self) -> Literal["file", "s3"]:
+        scheme = urlparse(self.location).scheme
+        if scheme == "":
+            return "file"
+        if scheme == "s3":
+            return "s3"
+        raise ValueError(f"Location with scheme type '{scheme}' not supported.")
+
+    @property
     def metadata_root(self) -> str:
         return f"{self.location.removesuffix('/')}/metadata"
 
@@ -59,7 +70,7 @@ class TIMDEXDatasetMetadata:
 
     def database_exists(self) -> bool:
         """Check if static metadata database file exists."""
-        if urlparse(self.metadata_database_path).scheme == "s3":
+        if self.location_scheme == "s3":
             s3_client = S3Client()
             return s3_client.object_exists(self.metadata_database_path)
         return os.path.exists(self.metadata_database_path)
@@ -75,10 +86,11 @@ class TIMDEXDatasetMetadata:
             5. Upload DuckDB database file to target destination, making that the new
             static metadata database file
         """
-        s3_client = S3Client()
-
-        # remove any append deltas that may exist at this time of database recreation
-        s3_client.delete_folder(self.append_deltas_path)
+        if self.location_scheme == "s3":
+            s3_client = S3Client()
+            s3_client.delete_folder(self.append_deltas_path)
+        else:
+            shutil.rmtree(self.append_deltas_path, ignore_errors=True)
 
         # build database locally
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -91,10 +103,18 @@ class TIMDEXDatasetMetadata:
                 self._create_full_dataset_table(conn)
 
             # copy local database file to remote location
-            s3_client.upload_file(
-                local_db_path,
-                self.metadata_database_path,
-            )
+            if self.location_scheme == "s3":
+                s3_client = S3Client()
+                s3_client.upload_file(
+                    local_db_path,
+                    self.metadata_database_path,
+                )
+            else:
+                Path(self.metadata_database_path).parent.mkdir(
+                    parents=True,
+                    exist_ok=True,
+                )
+                shutil.copy(local_db_path, self.metadata_database_path)
 
         # refresh DuckDB connection
         self.conn = self.setup_duckdb_context()

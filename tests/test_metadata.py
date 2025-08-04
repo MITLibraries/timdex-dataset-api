@@ -1,42 +1,36 @@
-# ruff: noqa: PLR2004
+from duckdb import DuckDBPyConnection
 
-import duckdb
-
-from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
+from timdex_dataset_api import TIMDEXDatasetMetadata
 
 
-def test_tdm_init_from_timdex_dataset_instance_success(dataset_with_same_day_runs):
-    tdm = TIMDEXDatasetMetadata(timdex_dataset=dataset_with_same_day_runs)
-    assert isinstance(tdm.timdex_dataset, TIMDEXDataset)
+def test_tdm_init_no_metadata_file_warning_success(caplog, dataset_with_runs_location):
+    tdm = TIMDEXDatasetMetadata(dataset_with_runs_location)
+
+    assert tdm.conn is None
+    assert "Static metadata database not found" in caplog.text
 
 
-def test_tdm_init_from_timdex_dataset_path_success(dataset_with_runs_location):
-    tdm = TIMDEXDatasetMetadata.from_dataset_location(dataset_with_runs_location)
-    assert isinstance(tdm.timdex_dataset, TIMDEXDataset)
+def test_tdm_local_dataset_structure_properties():
+    local_root = "/path/to/nothing"
+    tdm_local = TIMDEXDatasetMetadata(local_root)
+    assert tdm_local.location == local_root
+    assert tdm_local.location_scheme == "file"
 
 
-def test_tdm_default_database_location_in_memory(timdex_dataset_metadata):
-    assert timdex_dataset_metadata.db_path == ":memory:"
-    result = timdex_dataset_metadata.conn.query("PRAGMA database_list;").fetchone()
-    assert result[1] == "memory"  # name of database
-    assert result[2] is None  # file associated with database, where None is memory
+def test_tdm_s3_dataset_structure_properties(mocked_timdex_bucket):
+    s3_root = "s3://timdex/dataset"
+    tdm_s3 = TIMDEXDatasetMetadata(s3_root)
+    assert tdm_s3.location == s3_root
+    assert tdm_s3.location_scheme == "s3"
 
 
-def test_tdm_explicit_database_in_file(tmp_path, dataset_with_runs_location):
-    db_path = str(tmp_path / "tda.duckdb")
-    tdm = TIMDEXDatasetMetadata.from_dataset_location(
-        dataset_with_runs_location,
-        db_path=db_path,
-    )
-    assert tdm.db_path == db_path
-    result = tdm.conn.query("PRAGMA database_list;").fetchone()
-    assert result[1] == "tda"  # name of database
-    assert result[2] == db_path  # filepath passed during init
+def test_tdm_create_metadata_database_file_success(caplog, timdex_dataset_metadata_empty):
+    caplog.set_level("DEBUG")
+    timdex_dataset_metadata_empty.recreate_static_database_file()
 
 
-def test_tdm_get_duckdb_connection(timdex_dataset_metadata):
-    conn = timdex_dataset_metadata.get_connection()
-    assert isinstance(conn, duckdb.DuckDBPyConnection)
+def test_tdm_init_metadata_file_found_success(timdex_dataset_metadata):
+    assert isinstance(timdex_dataset_metadata.conn, DuckDBPyConnection)
 
 
 def test_tdm_connection_has_static_database_attached(timdex_dataset_metadata):

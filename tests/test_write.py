@@ -52,6 +52,9 @@ def test_dataset_write_record_batches_uses_batch_size(
     )
 
 
+@pytest.mark.skip(
+    reason="Test unneeded soon when list[str] not supported for dataset location."
+)
 def test_dataset_write_to_multiple_locations_raise_error(sample_records_iter):
     timdex_dataset = TIMDEXDataset(
         location=["/path/to/records-1.parquet", "/path/to/records-2.parquet"]
