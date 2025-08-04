@@ -127,6 +127,10 @@ class TIMDEXDataset:
         self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
 
     @property
+    def data_records_root(self) -> str:
+        return f"{self.location.removesuffix('/')}/data/records"  # type: ignore[union-attr]
+
+    @property
     def row_count(self) -> int:
         """Get row count from loaded dataset."""
         if not self.dataset:
@@ -370,7 +374,7 @@ class TIMDEXDataset:
         start_time = time.perf_counter()
         self._written_files = []
 
-        dataset_filesystem, dataset_path = self.parse_location(self.location)
+        dataset_filesystem, dataset_path = self.parse_location(self.data_records_root)
         if isinstance(dataset_path, list):
             raise TypeError(
                 "Dataset location must be the root of a single dataset for writing"
