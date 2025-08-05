@@ -3,6 +3,7 @@
 import glob
 import os
 from datetime import date
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -17,7 +18,7 @@ from timdex_dataset_api.dataset import (
 
 
 @pytest.mark.parametrize(
-    ("location", "expected_file_system", "expected_source"),
+    ("location_param", "expected_file_system", "expected_source_param"),
     [
         (
             "path/to/dataset",
@@ -32,11 +33,19 @@ from timdex_dataset_api.dataset import (
     ],
 )
 def test_dataset_init_success(
-    location,
+    location_param,
     expected_file_system,
-    expected_source,
+    expected_source_param,
     mocked_timdex_bucket,
+    tmp_path,
 ):
+    location = location_param
+    expected_source = expected_source_param
+
+    if not location.startswith("s3://"):
+        location = str(tmp_path / location)
+        expected_source = str(tmp_path / expected_source)
+
     timdex_dataset = TIMDEXDataset(location=location)
     assert isinstance(timdex_dataset.filesystem, expected_file_system)
     assert timdex_dataset.paths == expected_source
@@ -63,16 +72,18 @@ def test_dataset_init_custom_config_object(monkeypatch, local_dataset_location):
 @patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
 @patch("timdex_dataset_api.dataset.ds.dataset")
 def test_dataset_load_local_sets_filesystem_and_dataset_success(
-    mock_pyarrow_ds, mock_local_fs
+    mock_pyarrow_ds, mock_local_fs, tmp_path
 ):
     mock_local_fs.return_value = MagicMock()
     mock_pyarrow_ds.return_value = MagicMock()
 
-    timdex_dataset = TIMDEXDataset(location="local/path/to/dataset")
+    location = str(Path(tmp_path) / "local/path/to/dataset")
+
+    timdex_dataset = TIMDEXDataset(location=location)
     result = timdex_dataset.load()
 
     mock_pyarrow_ds.assert_called_once_with(
-        "local/path/to/dataset/data/records",
+        f"{location}/data/records",
         schema=timdex_dataset.schema,
         format="parquet",
         partitioning="hive",
@@ -291,13 +302,13 @@ def test_dataset_get_s3_filesystem_success(mocker):
 
 
 @pytest.mark.parametrize(
-    ("location", "expected_filesystem", "expected_source"),
+    ("location_param", "expected_filesystem", "expected_source_param"),
     [
-        ("/path/to/dataset", fs.LocalFileSystem, "/path/to/dataset"),
+        ("path/to/dataset", fs.LocalFileSystem, "path/to/dataset"),
         (
-            ["/path/to/records1.parquet", "/path/to/records2.parquet"],
+            ["path/to/records1.parquet", "path/to/records2.parquet"],
             fs.LocalFileSystem,
-            ["/path/to/records1.parquet", "/path/to/records2.parquet"],
+            ["path/to/records1.parquet", "path/to/records2.parquet"],
         ),
         ("s3://bucket/path/to/dataset", fs.S3FileSystem, "bucket/path/to/dataset"),
         (
@@ -316,25 +327,37 @@ def test_dataset_get_s3_filesystem_success(mocker):
 @patch("timdex_dataset_api.dataset.TIMDEXDataset.get_s3_filesystem")
 def test_dataset_parse_location_success(
     get_s3_filesystem,
-    location,
+    location_param,
     expected_filesystem,
-    expected_source,
+    expected_source_param,
+    tmp_path,
 ):
     get_s3_filesystem.return_value = fs.S3FileSystem()
+
+    location = location_param
+    expected_source = expected_source_param
+
+    if isinstance(location, str) and not location.startswith("s3://"):
+        location = str(tmp_path / location)
+        expected_source = str(tmp_path / expected_source)
+    elif isinstance(location, list) and not location[0].startswith("s3://"):
+        location = [str(tmp_path / path) for path in location]
+        expected_source = [str(tmp_path / path) for path in expected_source]
+
     filesystem, source = TIMDEXDataset.parse_location(location)
     assert isinstance(filesystem, expected_filesystem)
     assert source == expected_source
 
 
 @pytest.mark.parametrize(
-    ("location", "expected_exception"),
+    ("location_param", "expected_exception"),
     [
         # None is invalid location type
         (None, TypeError),
         # mixed local and S3 locations
         (
             [
-                "/local/path/to/dataset/records.parquet",
+                "local/path/to/dataset/records.parquet",
                 "s3://path/to/dataset/records.parquet",
             ],
             ValueError,
@@ -342,8 +365,21 @@ def test_dataset_parse_location_success(
     ],
 )
 @patch("timdex_dataset_api.dataset.TIMDEXDataset.get_s3_filesystem")
-def test_dataset_parse_location_error(get_s3_filesystem, location, expected_exception):
+def test_dataset_parse_location_error(
+    get_s3_filesystem, location_param, expected_exception, tmp_path
+):
     get_s3_filesystem.return_value = fs.S3FileSystem()
+
+    location = location_param
+    if isinstance(location, list) and not all(
+        path.startswith("s3://") for path in location
+    ):
+        # Update the local path with tmp_path
+        location = [
+            str(tmp_path / path) if not path.startswith("s3://") else path
+            for path in location
+        ]
+
     with pytest.raises(expected_exception):
         _ = TIMDEXDataset.parse_location(location)
 
@@ -356,8 +392,10 @@ def test_dataset_local_dataset_row_count_success(local_dataset):
     assert local_dataset.dataset.count_rows() == local_dataset.row_count
 
 
-def test_dataset_local_dataset_row_count_missing_dataset_raise_error(local_dataset):
-    td = TIMDEXDataset(location="path/to/nowhere")
+def test_dataset_local_dataset_row_count_missing_dataset_raise_error(
+    local_dataset, tmp_path
+):
+    td = TIMDEXDataset(location=str(tmp_path / "path/to/nowhere"))
     with pytest.raises(DatasetNotLoadedError):
         _ = td.row_count
 
