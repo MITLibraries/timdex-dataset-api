@@ -10,7 +10,9 @@ from collections.abc import Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, date, datetime
 from functools import reduce
-from typing import TYPE_CHECKING, TypedDict, Unpack
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
+from urllib.parse import urlparse
 
 import boto3
 import pandas as pd
@@ -20,6 +22,7 @@ from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.exceptions import DatasetNotLoadedError
+from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 if TYPE_CHECKING:
     from timdex_dataset_api.record import DatasetRecord  # pragma: nocover
@@ -117,18 +120,37 @@ class TIMDEXDataset:
         self.config = config or TIMDEXDatasetConfig()
         self.location = location
 
+        self.create_data_structure()
+
         # pyarrow dataset
-        self.filesystem, self.paths = self.parse_location(self.location)
+        self.filesystem, self.paths = self.parse_location(self.data_records_root)
         self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
 
-        # writing
-        self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
+        # dataset metadata
+        self.metadata = TIMDEXDatasetMetadata(location)  # type: ignore[arg-type]
+
+    @property
+    def location_scheme(self) -> Literal["file", "s3"]:
+        scheme = urlparse(self.location).scheme  # type: ignore[arg-type]
+        if scheme == "":
+            return "file"
+        if scheme == "s3":
+            return "s3"
+        raise ValueError(f"Location with scheme type '{scheme}' not supported.")
 
     @property
     def data_records_root(self) -> str:
         return f"{self.location.removesuffix('/')}/data/records"  # type: ignore[union-attr]
+
+    def create_data_structure(self) -> None:
+        """Ensure ETL records data structure exists in TIMDEX dataset."""
+        if self.location_scheme == "file":
+            Path(self.data_records_root).mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
     @property
     def row_count(self) -> int:
@@ -163,7 +185,7 @@ class TIMDEXDataset:
         start_time = time.perf_counter()
 
         # reset paths from original location before load
-        _, self.paths = self.parse_location(self.location)
+        _, self.paths = self.parse_location(self.data_records_root)
 
         # perform initial load of full dataset
         self.dataset = self._load_pyarrow_dataset()
@@ -172,7 +194,7 @@ class TIMDEXDataset:
         self.dataset = self._get_filtered_dataset(**filters)
 
         logger.info(
-            f"Dataset successfully loaded: '{self.location}', "
+            f"Dataset successfully loaded: '{self.data_records_root}', "
             f"{round(time.perf_counter()-start_time, 2)}s"
         )
 
@@ -298,6 +320,7 @@ class TIMDEXDataset:
             session_token=credentials.token,
         )
 
+    # NOTE: WIP: this will be heavily reworked in upcoming .load() updates
     @classmethod
     def parse_location(
         cls,
@@ -315,6 +338,7 @@ class TIMDEXDataset:
             case _:
                 raise TypeError("Location type must be str or list[str].")
 
+    # NOTE: WIP: these will be removed in upcoming .load() updates
     @classmethod
     def _parse_single_location(
         cls, location: str
@@ -328,6 +352,7 @@ class TIMDEXDataset:
             source = location
         return filesystem, source
 
+    # NOTE: WIP: these will be removed in upcoming .load() updates
     @classmethod
     def _parse_multiple_locations(
         cls, location: list[str]
@@ -348,6 +373,7 @@ class TIMDEXDataset:
         records_iter: Iterator["DatasetRecord"],
         *,
         use_threads: bool = True,
+        write_append_deltas: bool = True,
     ) -> list[ds.WrittenFile]:
         """Write records to the TIMDEX parquet dataset.
 
@@ -370,9 +396,11 @@ class TIMDEXDataset:
         Args:
             - records_iter: Iterator of DatasetRecord instances
             - use_threads: boolean if threads should be used for writing
+            - write_append_deltas: boolean if append deltas should be written for records
+                written during write
         """
         start_time = time.perf_counter()
-        self._written_files = []
+        written_files: list[ds.WrittenFile] = []
 
         dataset_filesystem, dataset_path = self.parse_location(self.data_records_root)
         if isinstance(dataset_path, list):
@@ -380,15 +408,15 @@ class TIMDEXDataset:
                 "Dataset location must be the root of a single dataset for writing"
             )
 
+        # write ETL parquet records
         record_batches_iter = self.create_record_batches(records_iter)
-
         ds.write_dataset(
             record_batches_iter,
             base_dir=dataset_path,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
             existing_data_behavior="overwrite_or_ignore",
             filesystem=dataset_filesystem,
-            file_visitor=lambda written_file: self._written_files.append(written_file),  # type: ignore[arg-type]
+            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
             max_open_files=500,
             max_rows_per_file=self.config.max_rows_per_file,
@@ -399,8 +427,14 @@ class TIMDEXDataset:
             use_threads=use_threads,
         )
 
-        self.log_write_statistics(start_time)
-        return self._written_files  # type: ignore[return-value]
+        # write metadata append deltas
+        if write_append_deltas:
+            for written_file in written_files:
+                self.metadata.write_append_delta_duckdb(written_file.path)  # type: ignore[attr-defined]
+
+        self.log_write_statistics(start_time, written_files)
+
+        return written_files
 
     def create_record_batches(
         self, records_iter: Iterator["DatasetRecord"]
@@ -423,19 +457,18 @@ class TIMDEXDataset:
             logger.debug(f"Yielding batch {i + 1} for dataset writing.")
             yield batch
 
-    def log_write_statistics(self, start_time: float) -> None:
+    def log_write_statistics(
+        self,
+        start_time: float,
+        written_files: list[ds.WrittenFile],
+    ) -> None:
         """Parse written files from write and log statistics."""
         total_time = round(time.perf_counter() - start_time, 2)
-        total_files = len(self._written_files)
+        total_files = len(written_files)
         total_rows = sum(
-            [
-                wf.metadata.num_rows  # type: ignore[attr-defined]
-                for wf in self._written_files
-            ]
+            [wf.metadata.num_rows for wf in written_files]  # type: ignore[attr-defined]
         )
-        total_size = sum(
-            [wf.size for wf in self._written_files]  # type: ignore[attr-defined]
-        )
+        total_size = sum([wf.size for wf in written_files])  # type: ignore[attr-defined]
         logger.info(
             f"Dataset write complete - elapsed: "
             f"{total_time}s, "

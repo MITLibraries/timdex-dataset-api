@@ -4,6 +4,7 @@ import os
 import shutil
 import tempfile
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 from urllib.parse import urlparse
@@ -12,11 +13,11 @@ import duckdb
 from duckdb import DuckDBPyConnection
 
 from timdex_dataset_api.config import configure_logger
-from timdex_dataset_api.utils import S3Client, configure_duckdb_s3_secret
+from timdex_dataset_api.utils import S3Client
 
 logger = configure_logger(__name__)
 
-ORDERED_DATASET_COLUMN_NAMES = [
+ORDERED_METADATA_COLUMN_NAMES = [
     "timdex_record_id",
     "source",
     "run_date",
@@ -27,6 +28,22 @@ ORDERED_DATASET_COLUMN_NAMES = [
     "run_timestamp",
     "filename",
 ]
+
+
+@dataclass
+class TIMDEXDatasetMetadataConfig:
+    """Configurations for metadata operations.
+
+    - duckdb_connection_memory_limit: Memory limit for DuckDB connection
+    - duckdb_connection_threads: Thread limit for DuckDB connection
+    """
+
+    duckdb_connection_memory_limit: str = field(
+        default_factory=lambda: os.getenv("TDA_DUCKDB_MEMORY_LIMIT", "4GB")
+    )
+    duckdb_connection_threads: int = field(
+        default_factory=lambda: int(os.getenv("TDA_DUCKDB_THREADS", "8"))
+    )
 
 
 class TIMDEXDatasetMetadata:
@@ -41,7 +58,10 @@ class TIMDEXDatasetMetadata:
             location: root location of TIMDEX dataset, e.g. 's3://timdex/dataset'
         """
         self.location = location
-        self.conn: None | DuckDBPyConnection = self.setup_duckdb_context()
+        self.config = TIMDEXDatasetMetadataConfig()
+
+        self.create_metadata_structure()
+        self.conn: DuckDBPyConnection = self.setup_duckdb_context()
 
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
@@ -68,12 +88,88 @@ class TIMDEXDatasetMetadata:
     def append_deltas_path(self) -> str:
         return f"{self.metadata_root}/append_deltas"
 
+    def create_metadata_structure(self) -> None:
+        """Ensure metadata structure exists in TIDMEX dataset.."""
+        if self.location_scheme == "file":
+            Path(self.metadata_database_path).parent.mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+            Path(self.append_deltas_path).mkdir(
+                parents=True,
+                exist_ok=True,
+            )
+
+    def configure_duckdb_connection(self, conn: DuckDBPyConnection) -> None:
+        """Configure a DuckDB connection/context.
+
+        These configurations include things like memory settings, AWS authentication, etc.
+        """
+        self._configure_duckdb_s3_secret(conn)
+        self._configure_duckdb_memory_profile(conn)
+
+    def _configure_duckdb_s3_secret(
+        self,
+        conn: DuckDBPyConnection,
+        scope: str | None = None,
+    ) -> None:
+        """Configure a secret in a DuckDB connection for S3 access.
+
+        If a scope is provided, e.g. an S3 URI prefix like 's3://timdex', set a scope
+        parameter in the config.  Else, leave it blank.
+        """
+        # establish scope string
+        scope_str = f", scope '{scope}'" if scope else ""
+
+        if os.getenv("MINIO_S3_ENDPOINT_URL"):
+            conn.execute(
+                f"""
+                create or replace secret minio_s3_secret (
+                    type s3,
+                    endpoint '{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}',
+                    key_id '{os.environ["MINIO_USERNAME"]}',
+                    secret '{os.environ["MINIO_PASSWORD"]}',
+                    region 'us-east-1',
+                    url_style 'path',
+                    use_ssl false
+                    {scope_str}
+                );
+                """
+            )
+
+        else:
+            conn.execute(
+                f"""
+                create or replace secret aws_s3_secret (
+                    type s3,
+                    provider credential_chain,
+                    chain 'sso;env;config',
+                    refresh true
+                    {scope_str}
+                );
+                """
+            )
+
+    def _configure_duckdb_memory_profile(self, conn: DuckDBPyConnection) -> None:
+        conn.execute(
+            f"""
+            set enable_external_file_cache = false;
+            set memory_limit = '{self.config.duckdb_connection_memory_limit}';
+            set threads = {self.config.duckdb_connection_threads};
+            set preserve_insertion_order=false;
+            """
+        )
+
     def database_exists(self) -> bool:
         """Check if static metadata database file exists."""
         if self.location_scheme == "s3":
             s3_client = S3Client()
             return s3_client.object_exists(self.metadata_database_path)
         return os.path.exists(self.metadata_database_path)
+
+    def refresh(self) -> None:
+        """Refresh DuckDB connection on self."""
+        self.conn = self.setup_duckdb_context()
 
     def recreate_static_database_file(self) -> None:
         """Create/recreate the static metadata database file.
@@ -97,8 +193,8 @@ class TIMDEXDatasetMetadata:
             local_db_path = str(Path(temp_dir) / self.metadata_database_filename)
 
             with duckdb.connect(local_db_path) as conn:
+                self.configure_duckdb_connection(conn)
                 conn.execute("""SET threads = 64;""")
-                configure_duckdb_s3_secret(conn)
 
                 self._create_full_dataset_table(conn)
 
@@ -110,10 +206,6 @@ class TIMDEXDatasetMetadata:
                     self.metadata_database_path,
                 )
             else:
-                Path(self.metadata_database_path).parent.mkdir(
-                    parents=True,
-                    exist_ok=True,
-                )
                 shutil.copy(local_db_path, self.metadata_database_path)
 
         # refresh DuckDB connection
@@ -132,7 +224,7 @@ class TIMDEXDatasetMetadata:
         query = f"""
             create or replace table records as (
                 select
-                    {','.join(ORDERED_DATASET_COLUMN_NAMES)}
+                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
                 from read_parquet(
                     '{self.location}/data/records/**/*.parquet',
                      hive_partitioning=true,
@@ -148,7 +240,7 @@ class TIMDEXDatasetMetadata:
             f"elapsed: {time.perf_counter() - start_time}"
         )
 
-    def setup_duckdb_context(self) -> DuckDBPyConnection | None:
+    def setup_duckdb_context(self) -> DuckDBPyConnection:
         """Create a DuckDB connection that provides full dataset metadata information.
 
         The following work is performed:
@@ -158,17 +250,16 @@ class TIMDEXDatasetMetadata:
 
         The resulting, in-memory DuckDB connection is used for all metadata queries.
         """
-        if not self.database_exists():
+        conn = duckdb.connect()
+        self.configure_duckdb_connection(conn)
+
+        if self.database_exists():
+            self._attach_database_file(conn)
+        else:
             logger.warning(
                 f"Static metadata database not found @ '{self.metadata_database_path}'. "
                 "Please recreate via TIMDEXDatasetMetadata.recreate_database_file()."
             )
-            return None
-
-        conn = duckdb.connect()
-        configure_duckdb_s3_secret(conn)
-
-        self._attach_database_file(conn)
 
         return conn
 
@@ -182,4 +273,40 @@ class TIMDEXDatasetMetadata:
         logger.debug(f"Attaching to static database file: {self.metadata_database_path}")
         conn.execute(
             f"""attach '{self.metadata_database_path}' AS static_db (READ_ONLY);"""
+        )
+
+    def write_append_delta_duckdb(self, filepath: str) -> None:
+        """Write an append delta for an ETL parquet file.
+
+        A DuckDB context is used to both read metadata-only columns from the ETL parquet
+        file, then write an append delta parquet file to /metadata/append_deltas.  The
+        write is performed by DuckDB's COPY function.
+
+        Note: this operation is safe in parallel with other possible append delta writes.
+        """
+        start_time = time.perf_counter()
+
+        output_path = f"{self.append_deltas_path}/append_delta-{filepath.split('/')[-1]}"
+
+        # ensure s3:// schema prefix is present
+        if self.location_scheme == "s3":
+            filepath = f"s3://{filepath.removeprefix("s3://")}"
+
+        # perform query + write as one SQL statement
+        sql = f"""
+        copy (
+            select
+                {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+            from read_parquet(
+                '{filepath}',
+                hive_partitioning=true,
+                filename=true
+            )
+        ) to '{output_path}'
+        (FORMAT parquet);
+        """
+        self.conn.execute(sql)
+
+        logger.debug(
+            f"Append delta written: {output_path}, {time.perf_counter()-start_time}s"
         )

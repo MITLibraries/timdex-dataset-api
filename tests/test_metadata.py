@@ -1,17 +1,20 @@
+import glob
+import os
+from pathlib import Path
+
 from duckdb import DuckDBPyConnection
 
 from timdex_dataset_api import TIMDEXDatasetMetadata
 
 
 def test_tdm_init_no_metadata_file_warning_success(caplog, dataset_with_runs_location):
-    tdm = TIMDEXDatasetMetadata(dataset_with_runs_location)
+    TIMDEXDatasetMetadata(dataset_with_runs_location)
 
-    assert tdm.conn is None
     assert "Static metadata database not found" in caplog.text
 
 
-def test_tdm_local_dataset_structure_properties():
-    local_root = "/path/to/nothing"
+def test_tdm_local_dataset_structure_properties(tmp_path):
+    local_root = str(Path(tmp_path) / "path/to/nothing")
     tdm_local = TIMDEXDatasetMetadata(local_root)
     assert tdm_local.location == local_root
     assert tdm_local.location_scheme == "file"
@@ -44,3 +47,14 @@ def test_tdm_connection_static_database_records_table_exists(timdex_dataset_meta
         """select * from static_db.records;"""
     ).to_df()
     assert len(records_df) > 0
+
+
+def test_dataset_metadata_structure_is_idempotent(timdex_dataset_metadata):
+    assert os.path.exists(timdex_dataset_metadata.metadata_root)
+    start_file_count = glob.glob(f"{timdex_dataset_metadata.metadata_root}/**/*")
+
+    timdex_dataset_metadata.create_metadata_structure()
+
+    assert os.path.exists(timdex_dataset_metadata.metadata_root)
+    end_file_count = glob.glob(f"{timdex_dataset_metadata.metadata_root}/**/*")
+    assert start_file_count == end_file_count
