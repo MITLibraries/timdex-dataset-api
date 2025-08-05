@@ -33,7 +33,8 @@ def local_dataset_location(tmp_path):
 def local_dataset(local_dataset_location):
     timdex_dataset = TIMDEXDataset(local_dataset_location)
     timdex_dataset.write(
-        generate_sample_records_with_simulated_partitions(num_records=5_000)
+        generate_sample_records_with_simulated_partitions(num_records=5_000),
+        write_append_deltas=False,
     )
     timdex_dataset.load()
     return timdex_dataset
@@ -65,7 +66,8 @@ def fixed_local_dataset(tmp_path) -> TIMDEXDataset:
                 source=source,
                 run_date="2024-12-01",
                 run_id=run_id,
-            )
+            ),
+            write_append_deltas=False,
         )
     timdex_dataset.load()
     return timdex_dataset
@@ -131,7 +133,7 @@ def dataset_with_runs_location(tmp_path) -> str:
             action=action,
             run_id=run_id,
         )
-        timdex_dataset.write(records)
+        timdex_dataset.write(records, write_append_deltas=False)
 
     return location
 
@@ -187,7 +189,7 @@ def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
             run_id=run_id,
             run_timestamp=run_timestamp,
         )
-        timdex_dataset.write(records)
+        timdex_dataset.write(records, write_append_deltas=False)
 
     # reload after writes
     timdex_dataset.load()
@@ -218,3 +220,24 @@ def timdex_dataset_metadata(dataset_with_runs_location):
     tdm = TIMDEXDatasetMetadata(dataset_with_runs_location)
     tdm.recreate_static_database_file()
     return tdm
+
+
+@pytest.fixture
+def timdex_dataset_metadata_with_deltas(
+    dataset_with_runs_location, timdex_dataset_metadata
+):
+    td = TIMDEXDataset(dataset_with_runs_location)
+
+    # perform an ETL write of 50 records
+    # results in 1 append delta, with 50 rows contained
+    records = generate_sample_records(
+        num_records=50,
+        source="alma",
+        run_date="2025-01-10",
+        run_type="daily",
+        action="index",
+        run_id="run-delta-1",
+    )
+    td.write(records)
+
+    return TIMDEXDatasetMetadata(dataset_with_runs_location)

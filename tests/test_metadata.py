@@ -58,3 +58,193 @@ def test_dataset_metadata_structure_is_idempotent(timdex_dataset_metadata):
     assert os.path.exists(timdex_dataset_metadata.metadata_root)
     end_file_count = glob.glob(f"{timdex_dataset_metadata.metadata_root}/**/*")
     assert start_file_count == end_file_count
+
+
+def test_tdm_views_created_on_init(timdex_dataset_metadata):
+    views = timdex_dataset_metadata.conn.query(
+        """select table_name from information_schema.tables where table_type = 'VIEW';"""
+    ).to_df()
+
+    expected_views = {"append_deltas", "records", "current_records"}
+    actual_views = set(views.table_name)
+    assert expected_views <= actual_views
+
+
+def test_tdm_records_view_structure(timdex_dataset_metadata):
+    records_df = timdex_dataset_metadata.conn.query(
+        """select * from records limit 1;"""
+    ).to_df()
+    expected_columns = {
+        "timdex_record_id",
+        "source",
+        "run_date",
+        "run_type",
+        "action",
+        "run_id",
+        "run_record_offset",
+        "run_timestamp",
+        "filename",
+    }
+    assert set(records_df.columns) == expected_columns
+
+
+def test_tdm_current_records_view_structure(timdex_dataset_metadata):
+    current_records_df = timdex_dataset_metadata.conn.query(
+        """select * from current_records limit 1;"""
+    ).to_df()
+    expected_columns = {
+        "timdex_record_id",
+        "source",
+        "run_date",
+        "run_type",
+        "action",
+        "run_id",
+        "run_record_offset",
+        "run_timestamp",
+        "filename",
+    }
+    assert set(current_records_df.columns) == expected_columns
+
+
+def test_tdm_append_deltas_view_empty_structure(timdex_dataset_metadata):
+    append_deltas_df = timdex_dataset_metadata.conn.query(
+        """select * from append_deltas;"""
+    ).to_df()
+    expected_columns = {
+        "timdex_record_id",
+        "source",
+        "run_date",
+        "run_type",
+        "action",
+        "run_id",
+        "run_record_offset",
+        "run_timestamp",
+        "filename",
+    }
+    assert set(append_deltas_df.columns) == expected_columns
+    assert len(append_deltas_df) == 0
+
+
+def test_tdm_records_count_property(timdex_dataset_metadata):
+    assert timdex_dataset_metadata.records_count > 0
+
+    manual_count = timdex_dataset_metadata.conn.query(
+        """select count(*) from records;"""
+    ).fetchone()[0]
+    assert timdex_dataset_metadata.records_count == manual_count
+
+
+def test_tdm_current_records_count_property(timdex_dataset_metadata):
+    assert timdex_dataset_metadata.current_records_count > 0
+
+    manual_count = timdex_dataset_metadata.conn.query(
+        """select count(*) from current_records;"""
+    ).fetchone()[0]
+    assert timdex_dataset_metadata.current_records_count == manual_count
+
+
+def test_tdm_append_deltas_count_property_empty(timdex_dataset_metadata):
+    assert timdex_dataset_metadata.append_deltas_count == 0
+
+
+def test_tdm_records_equals_static_without_deltas(timdex_dataset_metadata):
+    static_count = timdex_dataset_metadata.conn.query(
+        """select count(*) from static_db.records;"""
+    ).fetchone()[0]
+    records_count = timdex_dataset_metadata.conn.query(
+        """select count(*) from records;"""
+    ).fetchone()[0]
+    assert static_count == records_count
+
+
+def test_tdm_current_records_filtering_logic(timdex_dataset_metadata):
+    current_count = timdex_dataset_metadata.current_records_count
+    total_count = timdex_dataset_metadata.records_count
+
+    assert current_count <= total_count
+    assert current_count > 0
+
+
+def test_tdm_views_with_append_deltas(timdex_dataset_metadata_with_deltas):
+    views = timdex_dataset_metadata_with_deltas.conn.query(
+        """select table_name from information_schema.tables where table_type = 'VIEW';"""
+    ).to_df()
+
+    expected_views = {"append_deltas", "records", "current_records"}
+    actual_views = set(views.table_name)
+    assert expected_views.issubset(actual_views)
+
+
+def test_tdm_append_deltas_view_has_data(timdex_dataset_metadata_with_deltas):
+    append_deltas_count = timdex_dataset_metadata_with_deltas.append_deltas_count
+    assert append_deltas_count > 0
+
+
+def test_tdm_records_includes_deltas(timdex_dataset_metadata_with_deltas):
+    static_count = timdex_dataset_metadata_with_deltas.conn.query(
+        """select count(*) from static_db.records;"""
+    ).fetchone()[0]
+    deltas_count = timdex_dataset_metadata_with_deltas.append_deltas_count
+    records_count = timdex_dataset_metadata_with_deltas.records_count
+
+    assert records_count == static_count + deltas_count
+    assert records_count > static_count
+
+
+def test_tdm_current_records_with_deltas_logic(timdex_dataset_metadata_with_deltas):
+    current_count = timdex_dataset_metadata_with_deltas.current_records_count
+    total_count = timdex_dataset_metadata_with_deltas.records_count
+
+    assert current_count <= total_count
+    assert current_count > 0
+
+    # verify current records view returns unique timdex_record_id values
+    current_records_df = timdex_dataset_metadata_with_deltas.conn.query(
+        """select timdex_record_id from current_records;"""
+    ).to_df()
+
+    unique_count = len(current_records_df.timdex_record_id.unique())
+    assert unique_count == current_count
+
+
+def test_tdm_current_records_most_recent_version(timdex_dataset_metadata_with_deltas):
+    # check that for records with multiple versions, only the most recent is returned
+    multi_version_records = timdex_dataset_metadata_with_deltas.conn.query(
+        """
+        select timdex_record_id, count(*) as version_count
+        from records
+        group by timdex_record_id
+        having count(*) > 1
+        limit 1;
+        """
+    ).to_df()
+
+    if len(multi_version_records) > 0:
+        record_id = multi_version_records.iloc[0]["timdex_record_id"]
+
+        # get most recent timestamp for this record
+        most_recent = timdex_dataset_metadata_with_deltas.conn.query(
+            f"""
+            select run_timestamp, run_id
+            from records
+            where timdex_record_id = '{record_id}'
+            order by run_timestamp desc
+            limit 1;
+            """
+        ).to_df()
+
+        # verify current_records contains this version
+        current_version = timdex_dataset_metadata_with_deltas.conn.query(
+            f"""
+            select run_timestamp, run_id
+            from current_records
+            where timdex_record_id = '{record_id}';
+            """
+        ).to_df()
+
+        assert len(current_version) == 1
+        assert (
+            current_version.iloc[0]["run_timestamp"]
+            == most_recent.iloc[0]["run_timestamp"]
+        )
+        assert current_version.iloc[0]["run_id"] == most_recent.iloc[0]["run_id"]

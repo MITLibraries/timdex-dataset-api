@@ -431,6 +431,7 @@ class TIMDEXDataset:
         if write_append_deltas:
             for written_file in written_files:
                 self.metadata.write_append_delta_duckdb(written_file.path)  # type: ignore[attr-defined]
+            self.metadata.refresh()
 
         self.log_write_statistics(start_time, written_files)
 
