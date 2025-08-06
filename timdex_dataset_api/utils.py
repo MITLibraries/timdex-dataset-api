@@ -122,7 +122,7 @@ def configure_duckdb_s3_secret(
                 type s3,
                 provider credential_chain,
                 chain 'sso;env;config',
-                refresh true
+                refresh auto
                 {scope_str}
             );
             """
