@@ -20,10 +20,10 @@ from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.exceptions import DatasetNotLoadedError
-from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 if TYPE_CHECKING:
     from timdex_dataset_api.record import DatasetRecord  # pragma: nocover
+
 
 logger = configure_logger(__name__)
 
@@ -126,9 +126,9 @@ class TIMDEXDataset:
         # writing
         self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
 
-        # reading
-        self._current_records: bool = False
-        self.metadata: TIMDEXDatasetMetadata = None  # type: ignore[assignment]
+    @property
+    def data_records_root(self) -> str:
+        return f"{self.location.removesuffix('/')}/data/records"  # type: ignore[union-attr]
 
     @property
     def row_count(self) -> int:
@@ -139,8 +139,6 @@ class TIMDEXDataset:
 
     def load(
         self,
-        *,
-        current_records: bool = False,
         **filters: Unpack[DatasetFilters],
     ) -> None:
         """Lazy load a pyarrow.dataset.Dataset and set to self.dataset.
@@ -161,20 +159,11 @@ class TIMDEXDataset:
             - filters: kwargs typed via DatasetFilters TypedDict
                 - Filters passed directly in method call, e.g. source="alma",
                  run_date="2024-12-20", etc., but are typed according to DatasetFilters.
-            - current_records: bool
-                - if True, all records yielded from this instance will be the current
-                version of the record in the dataset.
         """
         start_time = time.perf_counter()
 
         # reset paths from original location before load
         _, self.paths = self.parse_location(self.location)
-
-        # read dataset metadata if only current records are requested
-        self._current_records = current_records
-        if current_records:
-            self.metadata = TIMDEXDatasetMetadata(timdex_dataset=self)
-            self.paths = self.metadata.get_current_parquet_files(**filters)
 
         # perform initial load of full dataset
         self.dataset = self._load_pyarrow_dataset()
@@ -385,7 +374,7 @@ class TIMDEXDataset:
         start_time = time.perf_counter()
         self._written_files = []
 
-        dataset_filesystem, dataset_path = self.parse_location(self.location)
+        dataset_filesystem, dataset_path = self.parse_location(self.data_records_root)
         if isinstance(dataset_path, list):
             raise TypeError(
                 "Dataset location must be the root of a single dataset for writing"
@@ -465,10 +454,6 @@ class TIMDEXDataset:
         While batch_size will limit the max rows per batch, filtering may result in some
         batches having less than this limit.
 
-        If the flag self._current_records is set, this method leans on
-        self._yield_current_record_deduped_batches() to apply deduplication of records to
-        ensure only current versions of the record are ever yielded.
-
         Args:
             - columns: list[str], list of columns to return from the dataset
             - filters: pairs of column:value to filter the dataset
@@ -479,13 +464,6 @@ class TIMDEXDataset:
             )
         dataset = self._get_filtered_dataset(**filters)
 
-        # if current records, add required columns for deduplication
-        if self._current_records:
-            if not columns:
-                columns = TIMDEX_DATASET_SCHEMA.names
-            columns.extend(["timdex_record_id", "run_id"])
-            columns = list(set(columns))
-
         batches = dataset.to_batches(
             columns=columns,
             batch_size=self.config.read_batch_size,
@@ -493,59 +471,9 @@ class TIMDEXDataset:
             fragment_readahead=self.config.fragment_read_ahead,
         )
 
-        if self._current_records:
-            yield from self._yield_current_record_batches(batches, **filters)
-        else:
-            for batch in batches:
-                if len(batch) > 0:
-                    yield batch
-
-    def _yield_current_record_batches(
-        self,
-        batches: Iterator[pa.RecordBatch],
-        **filters: Unpack[DatasetFilters],
-    ) -> Iterator[pa.RecordBatch]:
-        """Method to yield only the most recent version of each record.
-
-        When multiple versions of a record (same timdex_record_id) exist in the dataset,
-        this method ensures only the most recent version is returned.  If filtering is
-        applied that removes this most recent version of a record, that timdex_record_id
-        will not be yielded at all.
-
-        This method uses TIMDEXDatasetMetadata to provide a mapping of timdex_record_id to
-        run_id for the current ETL run for that record.  While yielding records, only when
-        the timdex_record_id + run_id match the mapping is a record yielded.
-
-        Args:
-            - batches: batches of records to actually yield from
-            - filters: pairs of column:value to filter the dataset metadata required
-        """
-        # get map of timdex_record_id to run_id for current version of that record
-        record_to_run_map = self.metadata.get_current_record_to_run_map(**filters)
-
-        # loop through batches, yielding only current records
         for batch in batches:
-
-            if batch.num_rows == 0:
-                continue
-
-            to_yield_indices = []
-
-            record_ids = batch.column("timdex_record_id").to_pylist()
-            run_ids = batch.column("run_id").to_pylist()
-
-            for i, (record_id, run_id) in enumerate(
-                zip(
-                    record_ids,
-                    run_ids,
-                    strict=True,
-                )
-            ):
-                if record_to_run_map.get(record_id) == run_id:
-                    to_yield_indices.append(i)
-
-            if to_yield_indices:
-                yield batch.take(pa.array(to_yield_indices))  # type: ignore[arg-type]
+            if len(batch) > 0:
+                yield batch
 
     def read_dataframes_iter(
         self,

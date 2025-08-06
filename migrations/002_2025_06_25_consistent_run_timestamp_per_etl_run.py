@@ -1,4 +1,7 @@
-# ruff: noqa: BLE001, D212, TRY300, TRY400
+# ruff: noqa: PGH004
+# ruff: noqa
+# type: ignore
+
 """
 Date: 2025-06-25
 
@@ -29,6 +32,10 @@ PYTHONPATH=. \
 pipenv run python migrations/002_2025_06_25_consistent_run_timestamp_per_etl_run.py \
 <DATASET_LOCATION> \
 --dry-run
+
+Update: 2025-08-04
+
+This migration is no longer functional given changes to TIMDEXDataset.
 """
 
 import argparse
