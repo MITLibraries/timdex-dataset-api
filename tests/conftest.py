@@ -1,17 +1,15 @@
 """tests/conftest.py"""
 
-import os
+from collections.abc import Iterator
 
 import boto3
 import moto
 import pytest
 
-from tests.utils import (
-    generate_sample_records,
-    generate_sample_records_with_simulated_partitions,
-)
+from tests.utils import generate_sample_records
 from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
+from timdex_dataset_api.record import DatasetRecord
 
 
 @pytest.fixture(autouse=True)
@@ -24,35 +22,78 @@ def _test_env(monkeypatch):
     monkeypatch.delenv("MINIO_S3_ENDPOINT_URL", raising=False)
 
 
-@pytest.fixture
-def local_dataset_location(tmp_path):
-    return str(tmp_path / "local_dataset/")
+# ================================================================================
+# S3/AWS Fixtures
+# ================================================================================
 
 
 @pytest.fixture
-def local_dataset(local_dataset_location):
-    timdex_dataset = TIMDEXDataset(local_dataset_location)
-    timdex_dataset.write(
-        generate_sample_records_with_simulated_partitions(num_records=5_000),
+def s3_bucket_name():
+    """S3 bucket name for testing."""
+    return "timdex"
+
+
+@pytest.fixture
+def s3_bucket_mocked(s3_bucket_name):
+    """Mocked S3 bucket using moto."""
+    with moto.mock_aws():
+        conn = boto3.resource("s3", region_name="us-east-1")
+        conn.create_bucket(Bucket=s3_bucket_name)
+        yield conn
+
+
+# ================================================================================
+# Base Dataset Fixtures
+# ================================================================================
+
+
+@pytest.fixture
+def timdex_dataset_empty(tmp_path) -> TIMDEXDataset:
+    """Empty TIMDEXDataset instance without any data."""
+    return TIMDEXDataset(str(tmp_path / "empty_dataset/"))
+
+
+@pytest.fixture
+def timdex_dataset_config() -> TIMDEXDatasetConfig:
+    """Default dataset configuration that can be overridden."""
+    return TIMDEXDatasetConfig()
+
+
+@pytest.fixture
+def timdex_dataset_config_small() -> TIMDEXDatasetConfig:
+    """Small file configuration for testing partitioning behavior."""
+    return TIMDEXDatasetConfig(max_rows_per_group=75, max_rows_per_file=75)
+
+
+@pytest.fixture
+def timdex_dataset(tmp_path, timdex_dataset_config) -> TIMDEXDataset:
+    """Basic TIMDEXDataset with 1000 sample records from alma source."""
+    dataset = TIMDEXDataset(
+        str(tmp_path / "basic_dataset/"), config=timdex_dataset_config
+    )
+    dataset.write(
+        generate_sample_records(
+            num_records=1000,
+            source="alma",
+            run_date="2024-12-01",
+            run_type="full",
+            action="index",
+            run_id="test-run-1",
+        ),
         write_append_deltas=False,
     )
-    timdex_dataset.load()
-    return timdex_dataset
+    dataset.load()
+    return dataset
 
 
 @pytest.fixture
-def new_local_dataset(tmp_path) -> TIMDEXDataset:
-    return TIMDEXDataset(location=str(tmp_path / "new_local_dataset/"))
+def timdex_dataset_multi_source(tmp_path) -> TIMDEXDataset:
+    """TIMDEXDataset with multiple sources for testing filtering.
 
-
-@pytest.fixture
-def fixed_local_dataset(tmp_path) -> TIMDEXDataset:
-    """Local dataset with a fixed set of configurations.
-
-    This fixture is required to perform unit tests for TIMDEXDataset.filter
-    method.
+    Contains 1000 records each from: alma, dspace, aspace, libguides, gismit
     """
-    timdex_dataset = TIMDEXDataset(str(tmp_path / "fixed_local_dataset/"))
+    dataset = TIMDEXDataset(str(tmp_path / "multi_source_dataset/"))
+
     for source, run_id in [
         ("alma", "abc123"),
         ("dspace", "def456"),
@@ -60,176 +101,140 @@ def fixed_local_dataset(tmp_path) -> TIMDEXDataset:
         ("libguides", "jkl123"),
         ("gismit", "mno456"),
     ]:
-        timdex_dataset.write(
+        dataset.write(
             generate_sample_records(
-                num_records=1_000,
+                num_records=1000,
                 source=source,
                 run_date="2024-12-01",
                 run_id=run_id,
             ),
             write_append_deltas=False,
         )
-    timdex_dataset.load()
-    return timdex_dataset
+
+    dataset.load()
+    return dataset
 
 
 @pytest.fixture
-def sample_records_iter():
-    """Simulates an iterator of X number of valid DatasetRecord instances."""
+def timdex_dataset_with_runs(tmp_path, timdex_dataset_config_small) -> TIMDEXDataset:
+    """TIMDEXDataset with multiple full and daily ETL runs.
 
-    def _records_iter(num_records):
-        return generate_sample_records(num_records)
-
-    return _records_iter
-
-
-@pytest.fixture
-def dataset_with_runs_location(tmp_path) -> str:
-    """Fixture to simulate a dataset with multiple full and daily ETL runs."""
-    location = str(tmp_path / "dataset_with_runs")
-    os.mkdir(location)
-
-    timdex_dataset = TIMDEXDataset(
-        location, config=TIMDEXDatasetConfig(max_rows_per_group=75, max_rows_per_file=75)
-    )
-    timdex_dataset.load()
-
-    run_params = []
-
-    # simulate ETL runs for 'alma'
-    run_params.extend(
-        [
-            (40, "alma", "2024-12-01", "full", "index", "run-1"),
-            (20, "alma", "2024-12-15", "daily", "index", "run-2"),
-            (100, "alma", "2025-01-01", "full", "index", "run-3"),
-            (50, "alma", "2025-01-02", "daily", "index", "run-4"),
-            (25, "alma", "2025-01-03", "daily", "index", "run-5"),
-            (10, "alma", "2025-01-04", "daily", "delete", "run-6"),
-            (9, "alma", "2025-01-05", "daily", "index", "run-7"),
-        ]
-    )
-
-    # simulate ETL runs for 'dspace'
-    run_params.extend(
-        [
-            (30, "dspace", "2024-12-02", "full", "index", "run-8"),
-            (10, "dspace", "2024-12-16", "daily", "index", "run-9"),
-            (90, "dspace", "2025-02-01", "full", "index", "run-10"),
-            (40, "dspace", "2025-02-02", "daily", "index", "run-11"),
-            (15, "dspace", "2025-02-03", "daily", "index", "run-12"),
-            (5, "dspace", "2025-02-04", "daily", "delete", "run-13"),
-            (4, "dspace", "2025-02-05", "daily", "index", "run-14"),
-        ]
-    )
-
-    # write to dataset
-    for params in run_params:
-        num_records, source, run_date, run_type, action, run_id = params
-        records = generate_sample_records(
-            num_records,
-            source=source,
-            run_date=run_date,
-            run_type=run_type,
-            action=action,
-            run_id=run_id,
-        )
-        timdex_dataset.write(records, write_append_deltas=False)
-
-    return location
-
-
-@pytest.fixture
-def dataset_with_runs(dataset_with_runs_location) -> TIMDEXDataset:
-    return TIMDEXDataset(dataset_with_runs_location)
-
-
-@pytest.fixture
-def dataset_with_same_day_runs(tmp_path) -> TIMDEXDataset:
-    """Dataset fixture where a single source had multiple runs on the same day.
-
-    After these runs, we'd expect 70 records in Opensearch:
-        - most recent full run "run-2" established a 75 record base
-        - runs "run-3" and "run-4" just modified records; no record count change
-        - run "run-5" deleted 5 records
-
-    If the order of full runs 1 & 2 are not handled correctly, we'd see an incorrect
-    baseline of 100 records.
-
-    If the order of daily runs 4 & 5 are not handled correctly, we'd see 75 records
-    because the deletes would happen before the index just recreated the records.
+    Simulates realistic ETL pattern with:
+    - Multiple sources (alma, dspace)
+    - Full and daily runs
+    - Index and delete actions
+    - Small file sizes to test partitioning
     """
-    location = str(tmp_path / "dataset_with_same_day_runs")
-    os.mkdir(location)
-
-    timdex_dataset = TIMDEXDataset(location)
-
-    run_params = []
-
-    # Simulate two "full" runs where "run-2" should establish the baseline.
-    # Simulate daily runs, multiple per day sometimes, where deletes from "run-5" should
-    # be represented.
-    run_params.extend(
-        [
-            (100, "alma", "2025-01-01", "full", "index", "run-1", "2025-01-01T01:00:00"),
-            (75, "alma", "2025-01-01", "full", "index", "run-2", "2025-01-01T02:00:00"),
-            (10, "alma", "2025-01-01", "daily", "index", "run-3", "2025-01-01T03:00:00"),
-            (20, "alma", "2025-01-02", "daily", "index", "run-4", "2025-01-02T01:00:00"),
-            (5, "alma", "2025-01-02", "daily", "delete", "run-5", "2025-01-02T02:00:00"),
-        ]
+    dataset = TIMDEXDataset(
+        str(tmp_path / "dataset_with_runs/"), config=timdex_dataset_config_small
     )
 
-    for params in run_params:
-        num_records, source, run_date, run_type, action, run_id, run_timestamp = params
-        records = generate_sample_records(
-            num_records,
-            source=source,
-            run_date=run_date,
-            run_type=run_type,
-            action=action,
-            run_id=run_id,
-            run_timestamp=run_timestamp,
+    # alma ETL runs
+    alma_runs = [
+        (40, "alma", "2024-12-01", "full", "index", "run-1"),
+        (20, "alma", "2024-12-15", "daily", "index", "run-2"),
+        (100, "alma", "2025-01-01", "full", "index", "run-3"),
+        (50, "alma", "2025-01-02", "daily", "index", "run-4"),
+        (25, "alma", "2025-01-03", "daily", "index", "run-5"),
+        (10, "alma", "2025-01-04", "daily", "delete", "run-6"),
+        (9, "alma", "2025-01-05", "daily", "index", "run-7"),
+    ]
+
+    # dspace ETL runs
+    dspace_runs = [
+        (30, "dspace", "2024-12-02", "full", "index", "run-8"),
+        (10, "dspace", "2024-12-16", "daily", "index", "run-9"),
+        (90, "dspace", "2025-02-01", "full", "index", "run-10"),
+        (40, "dspace", "2025-02-02", "daily", "index", "run-11"),
+        (15, "dspace", "2025-02-03", "daily", "index", "run-12"),
+        (5, "dspace", "2025-02-04", "daily", "delete", "run-13"),
+        (4, "dspace", "2025-02-05", "daily", "index", "run-14"),
+    ]
+
+    for num_records, source, run_date, run_type, action, run_id in (
+        alma_runs + dspace_runs
+    ):
+        dataset.write(
+            generate_sample_records(
+                num_records=num_records,
+                source=source,
+                run_date=run_date,
+                run_type=run_type,
+                action=action,
+                run_id=run_id,
+            ),
+            write_append_deltas=False,
         )
-        timdex_dataset.write(records, write_append_deltas=False)
 
-    # reload after writes
-    timdex_dataset.load()
-
-    return timdex_dataset
+    dataset.load()
+    return dataset
 
 
 @pytest.fixture
-def timdex_bucket():
-    return "timdex"
+def timdex_dataset_same_day_runs(tmp_path) -> TIMDEXDataset:
+    """TIMDEXDataset with multiple runs on the same day for testing run ordering.
+
+    Tests proper handling of:
+    - Multiple full runs on same day (run-2 should establish baseline)
+    - Multiple daily runs on same day (deletes should be after indexes)
+    - Expected result: 70 records (75 base - 5 deletes)
+    """
+    dataset = TIMDEXDataset(str(tmp_path / "same_day_runs_dataset/"))
+
+    runs = [
+        (100, "alma", "2025-01-01", "full", "index", "run-1", "2025-01-01T01:00:00"),
+        (75, "alma", "2025-01-01", "full", "index", "run-2", "2025-01-01T02:00:00"),
+        (10, "alma", "2025-01-01", "daily", "index", "run-3", "2025-01-01T03:00:00"),
+        (20, "alma", "2025-01-02", "daily", "index", "run-4", "2025-01-02T01:00:00"),
+        (5, "alma", "2025-01-02", "daily", "delete", "run-5", "2025-01-02T02:00:00"),
+    ]
+
+    for num_records, source, run_date, run_type, action, run_id, run_timestamp in runs:
+        dataset.write(
+            generate_sample_records(
+                num_records=num_records,
+                source=source,
+                run_date=run_date,
+                run_type=run_type,
+                action=action,
+                run_id=run_id,
+                run_timestamp=run_timestamp,
+            ),
+            write_append_deltas=False,
+        )
+
+    dataset.load()
+    return dataset
+
+
+# ================================================================================
+# Dataset Metadata Fixtures
+# ================================================================================
 
 
 @pytest.fixture
-def mocked_timdex_bucket(timdex_bucket):
-    with moto.mock_aws():
-        conn = boto3.resource("s3", region_name="us-east-1")
-        conn.create_bucket(Bucket=timdex_bucket)
-        yield conn
+def timdex_metadata(timdex_dataset_with_runs) -> TIMDEXDatasetMetadata:
+    """TIMDEXDatasetMetadata with static database file created."""
+    metadata = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+    metadata.recreate_static_database_file()
+    return metadata
 
 
 @pytest.fixture
-def timdex_dataset_metadata_empty(dataset_with_runs_location):
-    return TIMDEXDatasetMetadata(dataset_with_runs_location)
+def timdex_metadata_empty(timdex_dataset_with_runs) -> TIMDEXDatasetMetadata:
+    """TIMDEXDatasetMetadata without static database file."""
+    return TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
 
 
 @pytest.fixture
-def timdex_dataset_metadata(dataset_with_runs_location):
-    tdm = TIMDEXDatasetMetadata(dataset_with_runs_location)
-    tdm.recreate_static_database_file()
-    return tdm
-
-
-@pytest.fixture
-def timdex_dataset_metadata_with_deltas(
-    dataset_with_runs_location, timdex_dataset_metadata
-):
-    td = TIMDEXDataset(dataset_with_runs_location)
+def timdex_metadata_with_deltas(
+    timdex_dataset_with_runs, timdex_metadata
+) -> TIMDEXDatasetMetadata:
+    """TIMDEXDatasetMetadata with append deltas from additional writes."""
+    td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
     # perform an ETL write of 50 records
-    # results in 1 append delta, with 50 rows contained
+    # results in 1 append delta with 50 rows therein
     records = generate_sample_records(
         num_records=50,
         source="alma",
@@ -240,4 +245,25 @@ def timdex_dataset_metadata_with_deltas(
     )
     td.write(records)
 
-    return TIMDEXDatasetMetadata(dataset_with_runs_location)
+    return TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+
+
+# ================================================================================
+# Utility Fixtures
+# ================================================================================
+
+
+@pytest.fixture
+def sample_records() -> Iterator[DatasetRecord]:
+    """Generate 100 sample records with default parameters."""
+    return generate_sample_records(num_records=100)
+
+
+@pytest.fixture
+def sample_records_generator():
+    """Factory fixture for generating custom sample records."""
+
+    def _generate(num_records: int = 100, **kwargs) -> Iterator[DatasetRecord]:
+        return generate_sample_records(num_records=num_records, **kwargs)
+
+    return _generate
