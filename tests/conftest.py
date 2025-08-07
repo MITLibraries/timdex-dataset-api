@@ -82,7 +82,6 @@ def timdex_dataset(tmp_path, timdex_dataset_config) -> TIMDEXDataset:
         ),
         write_append_deltas=False,
     )
-    dataset.load()
     return dataset
 
 
@@ -110,8 +109,6 @@ def timdex_dataset_multi_source(tmp_path) -> TIMDEXDataset:
             ),
             write_append_deltas=False,
         )
-
-    dataset.load()
     return dataset
 
 
@@ -165,8 +162,6 @@ def timdex_dataset_with_runs(tmp_path, timdex_dataset_config_small) -> TIMDEXDat
             ),
             write_append_deltas=False,
         )
-
-    dataset.load()
     return dataset
 
 
@@ -202,8 +197,6 @@ def timdex_dataset_same_day_runs(tmp_path) -> TIMDEXDataset:
             ),
             write_append_deltas=False,
         )
-
-    dataset.load()
     return dataset
 
 

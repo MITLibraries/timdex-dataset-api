@@ -110,12 +110,6 @@ timdex_dataset = TIMDEXDataset("s3://my-bucket/path/to/dataset")
 
 # or, local dataset (e.g. testing or development)
 timdex_dataset = TIMDEXDataset("/path/to/dataset")
-
-# load the dataset, which discovers all parquet files
-timdex_dataset.load()
-
-# or, load the dataset but ensure that only current records are ever yielded
-timdex_dataset.load(current_records=True)
 ```
 
 All read methods for `TIMDEXDataset` allow for the same group of filters which are defined in `timdex_dataset_api.dataset.DatasetFilters`.  Examples are shown below.

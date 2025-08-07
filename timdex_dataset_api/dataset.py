@@ -21,7 +21,6 @@ import pyarrow.dataset as ds
 from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
-from timdex_dataset_api.exceptions import DatasetNotLoadedError
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 if TYPE_CHECKING:
@@ -108,14 +107,13 @@ class TIMDEXDataset:
 
     def __init__(
         self,
-        location: str | list[str],
+        location: str,
         config: TIMDEXDatasetConfig | None = None,
     ):
         """Initialize TIMDEXDataset object.
 
         Args:
-            location (str | list[str]): Local filesystem path or an S3 URI to
-                a parquet dataset. For partitioned datasets, set to the base directory.
+            location (str ): Local filesystem path or an S3 URI to a parquet dataset.
         """
         self.config = config or TIMDEXDatasetConfig()
         self.location = location
@@ -123,17 +121,16 @@ class TIMDEXDataset:
         self.create_data_structure()
 
         # pyarrow dataset
-        self.filesystem, self.paths = self.parse_location(self.data_records_root)
-        self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
+        self.dataset = self.load_pyarrow_dataset()
 
         # dataset metadata
-        self.metadata = TIMDEXDatasetMetadata(location)  # type: ignore[arg-type]
+        self.metadata = TIMDEXDatasetMetadata(location)
 
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
-        scheme = urlparse(self.location).scheme  # type: ignore[arg-type]
+        scheme = urlparse(self.location).scheme
         if scheme == "":
             return "file"
         if scheme == "s3":
@@ -152,60 +149,185 @@ class TIMDEXDataset:
                 exist_ok=True,
             )
 
-    @property
-    def row_count(self) -> int:
-        """Get row count from loaded dataset."""
-        if not self.dataset:
-            raise DatasetNotLoadedError
-        return self.dataset.count_rows()
-
-    def load(
-        self,
-        **filters: Unpack[DatasetFilters],
-    ) -> None:
-        """Lazy load a pyarrow.dataset.Dataset and set to self.dataset.
-
-        Loading is comprised of two main steps:
-
-        - load: Lazily load full dataset. PyArrow will "discover" full dataset.
-            Note: This step may take a couple of seconds but leans on PyArrow's
-            parquet reading processes.
-        - filter: Lazily filter rows in the PyArrow dataset by conditions on
-            TIMDEX_DATASET_FILTER_COLUMNS.
+    def load_pyarrow_dataset(self, parquet_files: list[str] | None = None) -> ds.Dataset:
+        """Lazy load a pyarrow.dataset.Dataset.
 
         The dataset is loaded via the expected schema as defined by module constant
         TIMDEX_DATASET_SCHEMA.  If the target dataset differs in any way, errors may be
         raised when reading or writing data.
 
         Args:
-            - filters: kwargs typed via DatasetFilters TypedDict
-                - Filters passed directly in method call, e.g. source="alma",
-                 run_date="2024-12-20", etc., but are typed according to DatasetFilters.
+            parquet_files: explicit list of parquet files to construct pyarrow dataset
         """
         start_time = time.perf_counter()
 
-        # reset paths from original location before load
-        _, self.paths = self.parse_location(self.data_records_root)
+        # get pyarrow filesystem and dataset path basesd on self.location
+        filesystem, path = self.parse_location(self.data_records_root)
 
-        # perform initial load of full dataset
-        self.dataset = self._load_pyarrow_dataset()
+        # set source for pyarrow dataset
+        source: str | list[str] = parquet_files or path
 
-        # filter dataset
-        self.dataset = self._get_filtered_dataset(**filters)
+        dataset = ds.dataset(
+            source,
+            schema=self.schema,
+            format="parquet",
+            partitioning="hive",
+            filesystem=filesystem,
+        )
 
         logger.info(
             f"Dataset successfully loaded: '{self.data_records_root}', "
             f"{round(time.perf_counter()-start_time, 2)}s"
         )
 
-    def _load_pyarrow_dataset(self) -> ds.Dataset:
-        """Load the pyarrow dataset per local filesystem and paths attributes."""
-        return ds.dataset(
-            self.paths,
-            schema=self.schema,
+        return dataset
+
+    def parse_location(
+        self,
+        location: str,
+    ) -> tuple[fs.FileSystem, str]:
+        """Parse and return a pyarrow filesystem and normalized parquet path(s)."""
+        if self.location_scheme == "s3":
+            filesystem = TIMDEXDataset.get_s3_filesystem()
+            source = location.removeprefix("s3://")
+        else:
+            filesystem = fs.LocalFileSystem()
+            source = location
+        return filesystem, source
+
+    @staticmethod
+    def get_s3_filesystem() -> fs.FileSystem:
+        """Instantiate a pyarrow S3 Filesystem for dataset loading.
+
+        If the env var 'MINIO_S3_ENDPOINT_URL' is present, assume a local MinIO S3
+        instance and configure accordingly, otherwise assume normal AWS S3.
+        """
+        session = boto3.session.Session()
+        credentials = session.get_credentials()
+        if not credentials:
+            raise RuntimeError("Could not locate AWS credentials")
+
+        if os.getenv("MINIO_S3_ENDPOINT_URL"):
+            return fs.S3FileSystem(  # pragma: nocover
+                access_key=os.environ["MINIO_USERNAME"],
+                secret_key=os.environ["MINIO_PASSWORD"],
+                endpoint_override=os.environ["MINIO_S3_ENDPOINT_URL"],
+            )
+
+        return fs.S3FileSystem(
+            secret_key=credentials.secret_key,
+            access_key=credentials.access_key,
+            region=session.region_name,
+            session_token=credentials.token,
+        )
+
+    def write(
+        self,
+        records_iter: Iterator["DatasetRecord"],
+        *,
+        use_threads: bool = True,
+        write_append_deltas: bool = True,
+    ) -> list[ds.WrittenFile]:
+        """Write records to the TIMDEX parquet dataset.
+
+        This method expects an iterator of DatasetRecord instances.
+
+        This method encapsulates all dataset writing mechanics and performance
+        optimizations (e.g. batching) so that the calling context can focus on yielding
+        data.
+
+        This method uses the configuration existing_data_behavior="overwrite_or_ignore",
+        which will ignore any existing data and will overwrite files with the same name
+        as the parquet file. Since a UUID is generated for each write via the
+        basename_template, this effectively makes a write idempotent to the
+        TIMDEX dataset.
+
+        A max_open_files=500 configuration is set to avoid AWS S3 503 error "SLOW_DOWN"
+        if too many PutObject calls are made in parallel.  Testing suggests this does not
+        substantially slow down the overall write.
+
+        Args:
+            - records_iter: Iterator of DatasetRecord instances
+            - use_threads: boolean if threads should be used for writing
+            - write_append_deltas: boolean if append deltas should be written for records
+                written during write
+        """
+        start_time = time.perf_counter()
+        written_files: list[ds.WrittenFile] = []
+
+        filesystem, path = self.parse_location(self.data_records_root)
+
+        # write ETL parquet records
+        record_batches_iter = self.create_record_batches(records_iter)
+        ds.write_dataset(
+            record_batches_iter,
+            base_dir=path,
+            basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
+            existing_data_behavior="overwrite_or_ignore",
+            filesystem=filesystem,
+            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
-            partitioning="hive",
-            filesystem=self.filesystem,
+            max_open_files=500,
+            max_rows_per_file=self.config.max_rows_per_file,
+            max_rows_per_group=self.config.max_rows_per_group,
+            partitioning=self.partition_columns,
+            partitioning_flavor="hive",
+            schema=self.schema,
+            use_threads=use_threads,
+        )
+
+        # refresh dataset files
+        self.dataset = self.load_pyarrow_dataset()
+
+        # write metadata append deltas
+        if write_append_deltas:
+            for written_file in written_files:
+                self.metadata.write_append_delta_duckdb(written_file.path)  # type: ignore[attr-defined]
+            self.metadata.refresh()
+
+        self.log_write_statistics(start_time, written_files)
+
+        return written_files
+
+    def create_record_batches(
+        self, records_iter: Iterator["DatasetRecord"]
+    ) -> Iterator[pa.RecordBatch]:
+        """Yield pyarrow.RecordBatches for writing.
+
+        This method expects an iterator of DatasetRecord instances.
+
+        Each DatasetRecord is serialized to a dictionary, any column data shared by all
+        rows is added to the record, and then added to a pyarrow.RecordBatch for writing.
+
+        Args:
+            - records_iter: Iterator of DatasetRecord instances
+        """
+        for i, record_batch in enumerate(
+            itertools.batched(records_iter, self.config.write_batch_size)
+        ):
+            record_dicts = [record.to_dict() for record in record_batch]
+            batch = pa.RecordBatch.from_pylist(record_dicts)
+            logger.debug(f"Yielding batch {i + 1} for dataset writing.")
+            yield batch
+
+    def log_write_statistics(
+        self,
+        start_time: float,
+        written_files: list[ds.WrittenFile],
+    ) -> None:
+        """Parse written files from write and log statistics."""
+        total_time = round(time.perf_counter() - start_time, 2)
+        total_files = len(written_files)
+        total_rows = sum(
+            [wf.metadata.num_rows for wf in written_files]  # type: ignore[attr-defined]
+        )
+        total_size = sum([wf.size for wf in written_files])  # type: ignore[attr-defined]
+        logger.info(
+            f"Dataset write complete - elapsed: "
+            f"{total_time}s, "
+            f"total files: {total_files}, "
+            f"total rows: {total_rows}, "
+            f"total size: {total_size}"
         )
 
     def _get_filtered_dataset(
@@ -224,8 +346,6 @@ class TIMDEXDataset:
                  run_date="2024-12-20", etc., but are typed according to DatasetFilters.
 
         Raises:
-            DatasetNotLoadedError: Raised if `self.dataset` is None.
-                TIMDEXDataset.load must be called before any filter method calls.
             ValueError: Raised if provided 'run_date' is an invalid type or
                 cannot be parsed.
 
@@ -233,9 +353,6 @@ class TIMDEXDataset:
             ds.Dataset: Original pyarrow.dataset.Dataset (if no filters applied)
                 or new pyarrow.dataset.Dataset with applied filters.
         """
-        if not self.dataset:
-            raise DatasetNotLoadedError
-
         # if run_date provided, derive year, month, and day partition filters and set
         if filters.get("run_date"):
             filters.update(self._parse_date_filters(filters["run_date"]))
@@ -294,190 +411,6 @@ class TIMDEXDataset:
             "day": run_date_obj.strftime("%d"),
         }
 
-    @staticmethod
-    def get_s3_filesystem() -> fs.FileSystem:
-        """Instantiate a pyarrow S3 Filesystem for dataset loading.
-
-        If the env var 'MINIO_S3_ENDPOINT_URL' is present, assume a local MinIO S3
-        instance and configure accordingly, otherwise assume normal AWS S3.
-        """
-        session = boto3.session.Session()
-        credentials = session.get_credentials()
-        if not credentials:
-            raise RuntimeError("Could not locate AWS credentials")
-
-        if os.getenv("MINIO_S3_ENDPOINT_URL"):
-            return fs.S3FileSystem(
-                access_key=os.environ["MINIO_USERNAME"],
-                secret_key=os.environ["MINIO_PASSWORD"],
-                endpoint_override=os.environ["MINIO_S3_ENDPOINT_URL"],
-            )
-
-        return fs.S3FileSystem(
-            secret_key=credentials.secret_key,
-            access_key=credentials.access_key,
-            region=session.region_name,
-            session_token=credentials.token,
-        )
-
-    # NOTE: WIP: this will be heavily reworked in upcoming .load() updates
-    @classmethod
-    def parse_location(
-        cls,
-        location: str | list[str],
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Parse and return the filesystem and normalized source location(s).
-
-        Handles both single location strings and lists of Parquet file paths.
-        """
-        match location:
-            case str():
-                return cls._parse_single_location(location)
-            case list():
-                return cls._parse_multiple_locations(location)
-            case _:
-                raise TypeError("Location type must be str or list[str].")
-
-    # NOTE: WIP: these will be removed in upcoming .load() updates
-    @classmethod
-    def _parse_single_location(
-        cls, location: str
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Get filesystem and normalized location for single location."""
-        if location.startswith("s3://"):
-            filesystem = TIMDEXDataset.get_s3_filesystem()
-            source = location.removeprefix("s3://")
-        else:
-            filesystem = fs.LocalFileSystem()
-            source = location
-        return filesystem, source
-
-    # NOTE: WIP: these will be removed in upcoming .load() updates
-    @classmethod
-    def _parse_multiple_locations(
-        cls, location: list[str]
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Get filesystem and normalized location for multiple locations."""
-        if all(loc.startswith("s3://") for loc in location):
-            filesystem = TIMDEXDataset.get_s3_filesystem()
-            source = [loc.removeprefix("s3://") for loc in location]
-        elif all(not loc.startswith("s3://") for loc in location):
-            filesystem = fs.LocalFileSystem()
-            source = location
-        else:
-            raise ValueError("Mixed S3 and local paths are not supported.")
-        return filesystem, source
-
-    def write(
-        self,
-        records_iter: Iterator["DatasetRecord"],
-        *,
-        use_threads: bool = True,
-        write_append_deltas: bool = True,
-    ) -> list[ds.WrittenFile]:
-        """Write records to the TIMDEX parquet dataset.
-
-        This method expects an iterator of DatasetRecord instances.
-
-        This method encapsulates all dataset writing mechanics and performance
-        optimizations (e.g. batching) so that the calling context can focus on yielding
-        data.
-
-        This method uses the configuration existing_data_behavior="overwrite_or_ignore",
-        which will ignore any existing data and will overwrite files with the same name
-        as the parquet file. Since a UUID is generated for each write via the
-        basename_template, this effectively makes a write idempotent to the
-        TIMDEX dataset.
-
-        A max_open_files=500 configuration is set to avoid AWS S3 503 error "SLOW_DOWN"
-        if too many PutObject calls are made in parallel.  Testing suggests this does not
-        substantially slow down the overall write.
-
-        Args:
-            - records_iter: Iterator of DatasetRecord instances
-            - use_threads: boolean if threads should be used for writing
-            - write_append_deltas: boolean if append deltas should be written for records
-                written during write
-        """
-        start_time = time.perf_counter()
-        written_files: list[ds.WrittenFile] = []
-
-        dataset_filesystem, dataset_path = self.parse_location(self.data_records_root)
-        if isinstance(dataset_path, list):
-            raise TypeError(
-                "Dataset location must be the root of a single dataset for writing"
-            )
-
-        # write ETL parquet records
-        record_batches_iter = self.create_record_batches(records_iter)
-        ds.write_dataset(
-            record_batches_iter,
-            base_dir=dataset_path,
-            basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
-            existing_data_behavior="overwrite_or_ignore",
-            filesystem=dataset_filesystem,
-            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type]
-            format="parquet",
-            max_open_files=500,
-            max_rows_per_file=self.config.max_rows_per_file,
-            max_rows_per_group=self.config.max_rows_per_group,
-            partitioning=self.partition_columns,
-            partitioning_flavor="hive",
-            schema=self.schema,
-            use_threads=use_threads,
-        )
-
-        # write metadata append deltas
-        if write_append_deltas:
-            for written_file in written_files:
-                self.metadata.write_append_delta_duckdb(written_file.path)  # type: ignore[attr-defined]
-            self.metadata.refresh()
-
-        self.log_write_statistics(start_time, written_files)
-
-        return written_files
-
-    def create_record_batches(
-        self, records_iter: Iterator["DatasetRecord"]
-    ) -> Iterator[pa.RecordBatch]:
-        """Yield pyarrow.RecordBatches for writing.
-
-        This method expects an iterator of DatasetRecord instances.
-
-        Each DatasetRecord is serialized to a dictionary, any column data shared by all
-        rows is added to the record, and then added to a pyarrow.RecordBatch for writing.
-
-        Args:
-            - records_iter: Iterator of DatasetRecord instances
-        """
-        for i, record_batch in enumerate(
-            itertools.batched(records_iter, self.config.write_batch_size)
-        ):
-            record_dicts = [record.to_dict() for record in record_batch]
-            batch = pa.RecordBatch.from_pylist(record_dicts)
-            logger.debug(f"Yielding batch {i + 1} for dataset writing.")
-            yield batch
-
-    def log_write_statistics(
-        self,
-        start_time: float,
-        written_files: list[ds.WrittenFile],
-    ) -> None:
-        """Parse written files from write and log statistics."""
-        total_time = round(time.perf_counter() - start_time, 2)
-        total_files = len(written_files)
-        total_rows = sum(
-            [wf.metadata.num_rows for wf in written_files]  # type: ignore[attr-defined]
-        )
-        total_size = sum([wf.size for wf in written_files])  # type: ignore[attr-defined]
-        logger.info(
-            f"Dataset write complete - elapsed: "
-            f"{total_time}s, "
-            f"total files: {total_files}, "
-            f"total rows: {total_rows}, "
-            f"total size: {total_size}"
-        )
-
     def read_batches_iter(
         self,
         columns: list[str] | None = None,
@@ -492,10 +425,6 @@ class TIMDEXDataset:
             - columns: list[str], list of columns to return from the dataset
             - filters: pairs of column:value to filter the dataset
         """
-        if not self.dataset:
-            raise DatasetNotLoadedError(
-                "Dataset is not loaded. Please call the `load` method first."
-            )
         dataset = self._get_filtered_dataset(**filters)
 
         batches = dataset.to_batches(
