@@ -1,5 +1,6 @@
 # ruff: noqa: D205, D209, SLF001, PLR2004
 
+import glob
 import os
 from datetime import date
 from unittest.mock import MagicMock, patch
@@ -18,11 +19,24 @@ from timdex_dataset_api.dataset import (
 @pytest.mark.parametrize(
     ("location", "expected_file_system", "expected_source"),
     [
-        ("path/to/dataset", fs.LocalFileSystem, "path/to/dataset"),
-        ("s3://bucket/path/to/dataset", fs.S3FileSystem, "bucket/path/to/dataset"),
+        (
+            "path/to/dataset",
+            fs.LocalFileSystem,
+            "path/to/dataset/data/records",
+        ),
+        (
+            "s3://timdex/path/to/dataset",
+            fs.S3FileSystem,
+            "timdex/path/to/dataset/data/records",
+        ),
     ],
 )
-def test_dataset_init_success(location, expected_file_system, expected_source):
+def test_dataset_init_success(
+    location,
+    expected_file_system,
+    expected_source,
+    mocked_timdex_bucket,
+):
     timdex_dataset = TIMDEXDataset(location=location)
     assert isinstance(timdex_dataset.filesystem, expected_file_system)
     assert timdex_dataset.paths == expected_source
@@ -58,7 +72,7 @@ def test_dataset_load_local_sets_filesystem_and_dataset_success(
     result = timdex_dataset.load()
 
     mock_pyarrow_ds.assert_called_once_with(
-        "local/path/to/dataset",
+        "local/path/to/dataset/data/records",
         schema=timdex_dataset.schema,
         format="parquet",
         partitioning="hive",
@@ -72,16 +86,16 @@ def test_dataset_load_local_sets_filesystem_and_dataset_success(
 @patch("timdex_dataset_api.dataset.TIMDEXDataset.get_s3_filesystem")
 @patch("timdex_dataset_api.dataset.ds.dataset")
 def test_dataset_load_s3_sets_filesystem_and_dataset_success(
-    mock_pyarrow_ds, mock_get_s3_fs
+    mock_pyarrow_ds, mock_get_s3_fs, mocked_timdex_bucket
 ):
     mock_get_s3_fs.return_value = MagicMock()
     mock_pyarrow_ds.return_value = MagicMock()
 
-    timdex_dataset = TIMDEXDataset(location="s3://bucket/path/to/dataset")
+    timdex_dataset = TIMDEXDataset(location="s3://timdex/path/to/dataset")
     result = timdex_dataset.load()
 
     mock_pyarrow_ds.assert_called_with(
-        "bucket/path/to/dataset",
+        "timdex/path/to/dataset/data/records",
         schema=timdex_dataset.schema,
         format="parquet",
         partitioning="hive",
@@ -497,3 +511,14 @@ def test_dataset_load_current_records_gets_correct_same_day_daily_runs_ordering(
 
     assert first_record["run_id"] == "run-5"
     assert first_record["action"] == "delete"
+
+
+def test_dataset_records_data_structure_is_idempotent(dataset_with_runs):
+    assert os.path.exists(dataset_with_runs.data_records_root)
+    start_file_count = glob.glob(f"{dataset_with_runs.data_records_root}/**/*")
+
+    dataset_with_runs.create_data_structure()
+
+    assert os.path.exists(dataset_with_runs.data_records_root)
+    end_file_count = glob.glob(f"{dataset_with_runs.data_records_root}/**/*")
+    assert start_file_count == end_file_count

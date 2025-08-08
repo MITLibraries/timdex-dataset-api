@@ -6,7 +6,6 @@ import pathlib
 from urllib.parse import urlparse
 
 import boto3
-from duckdb import DuckDBPyConnection
 from mypy_boto3_s3.service_resource import S3ServiceResource
 
 logger = logging.getLogger(__name__)
@@ -85,45 +84,3 @@ class S3Client:
         bucket = parsed.netloc
         key = parsed.path.lstrip("/")  # strip leading slash from /key
         return bucket, key
-
-
-def configure_duckdb_s3_secret(
-    conn: DuckDBPyConnection,
-    scope: str | None = None,
-) -> None:
-    """Configure a secret in a DuckDB connection for S3 access.
-
-    If a scope is provided, e.g. an S3 URI prefix like 's3://timdex', set a scope
-    parameter in the config.  Else, leave it blank.
-    """
-    # establish scope string
-    scope_str = f", scope '{scope}'" if scope else ""
-
-    if os.getenv("MINIO_S3_ENDPOINT_URL"):
-        conn.execute(
-            f"""
-            create or replace secret minio_s3_secret (
-                type s3,
-                endpoint '{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}',
-                key_id '{os.environ["MINIO_USERNAME"]}',
-                secret '{os.environ["MINIO_PASSWORD"]}',
-                region 'us-east-1',
-                url_style 'path',
-                use_ssl false
-                {scope_str}
-            );
-            """
-        )
-
-    else:
-        conn.execute(
-            f"""
-            create or replace secret aws_s3_secret (
-                type s3,
-                provider credential_chain,
-                chain 'sso;env;config',
-                refresh auto
-                {scope_str}
-            );
-            """
-        )

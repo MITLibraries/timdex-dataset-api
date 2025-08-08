@@ -1,9 +1,11 @@
 # ruff: noqa: PLR2004, D209, D205
 import math
 import os
+from pathlib import Path
 from unittest.mock import patch
 
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 import pytest
 
 from tests.utils import generate_sample_records
@@ -11,6 +13,7 @@ from timdex_dataset_api.dataset import (
     TIMDEX_DATASET_SCHEMA,
     TIMDEXDataset,
 )
+from timdex_dataset_api.metadata import ORDERED_METADATA_COLUMN_NAMES
 
 
 def test_dataset_write_records_to_new_local_dataset(
@@ -144,3 +147,38 @@ def test_dataset_write_partition_overwrite_files_with_same_name(
     # assert that only the second file exists and overwriting occurs
     assert os.path.exists(written_files_source_a1[0].path)
     assert new_local_dataset.row_count == 7
+
+
+def test_dataset_write_single_append_delta_success(
+    new_local_dataset, sample_records_iter
+):
+    written_files = new_local_dataset.write(sample_records_iter(1_000))
+    append_deltas = os.listdir(new_local_dataset.metadata.append_deltas_path)
+
+    assert len(append_deltas) == len(written_files)
+
+
+def test_dataset_write_multiple_append_deltas_success(
+    new_local_dataset, sample_records_iter
+):
+    """Expecting 10 ETL parquet files written, and so 10 append deltas as well."""
+    new_local_dataset.config.max_rows_per_file = 100
+    new_local_dataset.config.max_rows_per_group = 100
+
+    written_files = new_local_dataset.write(sample_records_iter(1_000))
+    append_deltas = os.listdir(new_local_dataset.metadata.append_deltas_path)
+
+    assert len(written_files) == 10
+    assert len(append_deltas) == len(written_files)
+
+
+def test_dataset_write_append_delta_expected_metadata_columns(
+    new_local_dataset, sample_records_iter
+):
+    new_local_dataset.write(sample_records_iter(1_000))
+    append_delta_filepath = os.listdir(new_local_dataset.metadata.append_deltas_path)[0]
+
+    append_delta = pq.ParquetFile(
+        new_local_dataset.metadata.append_deltas_path / Path(append_delta_filepath)
+    )
+    assert append_delta.schema.names == ORDERED_METADATA_COLUMN_NAMES
