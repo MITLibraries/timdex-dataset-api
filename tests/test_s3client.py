@@ -42,7 +42,7 @@ def test_split_s3_uri_invalid():
         client._split_s3_uri("timdex/path/to/file.txt")
 
 
-def test_upload_download_file(mocked_timdex_bucket, tmp_path):
+def test_upload_download_file(s3_bucket_mocked, tmp_path):
     """Test upload_file and download_file methods."""
     client = S3Client()
 
@@ -62,7 +62,7 @@ def test_upload_download_file(mocked_timdex_bucket, tmp_path):
     assert download_path.read_text() == "test content"
 
 
-def test_delete_file(mocked_timdex_bucket, tmp_path):
+def test_delete_file(s3_bucket_mocked, tmp_path):
     """Test delete_file method."""
     client = S3Client()
 
@@ -76,12 +76,12 @@ def test_delete_file(mocked_timdex_bucket, tmp_path):
     client.delete_file(s3_uri)
 
     # Verify the file is deleted
-    bucket = mocked_timdex_bucket.Bucket("timdex")
+    bucket = s3_bucket_mocked.Bucket("timdex")
     objects = list(bucket.objects.all())
     assert len(objects) == 0
 
 
-def test_delete_folder(mocked_timdex_bucket, tmp_path):
+def test_delete_folder(s3_bucket_mocked, tmp_path):
     """Test delete_folder method."""
     client = S3Client()
 
@@ -104,7 +104,7 @@ def test_delete_folder(mocked_timdex_bucket, tmp_path):
     assert len(deleted_keys) == 3
     assert all(key.startswith("folder/") for key in deleted_keys)
 
-    bucket = mocked_timdex_bucket.Bucket("timdex")
+    bucket = s3_bucket_mocked.Bucket("timdex")
     objects = list(bucket.objects.all())
     assert len(objects) == 1
     assert objects[0].key == "other.txt"

@@ -88,6 +88,21 @@ class TIMDEXDatasetMetadata:
     def append_deltas_path(self) -> str:
         return f"{self.metadata_root}/append_deltas"
 
+    @property
+    def records_count(self) -> int:
+        """Count of all records in dataset."""
+        return self.conn.query("""select count(*) from records;""").fetchone()[0]  # type: ignore[index]
+
+    @property
+    def current_records_count(self) -> int:
+        """Count of all current records in dataset."""
+        return self.conn.query("""select count(*) from current_records;""").fetchone()[0]  # type: ignore[index]
+
+    @property
+    def append_deltas_count(self) -> int:
+        """Count of all append deltas."""
+        return self.conn.query("""select count(*) from append_deltas;""").fetchone()[0]  # type: ignore[index]
+
     def create_metadata_structure(self) -> None:
         """Ensure metadata structure exists in TIDMEX dataset.."""
         if self.location_scheme == "file":
@@ -249,18 +264,30 @@ class TIMDEXDatasetMetadata:
             3. Create additional metadata views as needed.
 
         The resulting, in-memory DuckDB connection is used for all metadata queries.
+
+        If a static database file is not found, a configured DuckDB connection is still
+        returned.
         """
+        start_time = time.perf_counter()
+
         conn = duckdb.connect()
         self.configure_duckdb_connection(conn)
 
-        if self.database_exists():
-            self._attach_database_file(conn)
-        else:
+        if not self.database_exists():
             logger.warning(
                 f"Static metadata database not found @ '{self.metadata_database_path}'. "
                 "Please recreate via TIMDEXDatasetMetadata.recreate_database_file()."
             )
+            return conn
 
+        self._attach_database_file(conn)
+        self._create_append_deltas_view(conn)
+        self._create_records_union_view(conn)
+        self._create_current_records_view(conn)
+
+        logger.debug(
+            f"DuckDB context created, {round(time.perf_counter()-start_time,2)}s"
+        )
         return conn
 
     def _attach_database_file(self, conn: DuckDBPyConnection) -> None:
@@ -274,6 +301,101 @@ class TIMDEXDatasetMetadata:
         conn.execute(
             f"""attach '{self.metadata_database_path}' AS static_db (READ_ONLY);"""
         )
+
+    def _create_append_deltas_view(self, conn: DuckDBPyConnection) -> None:
+        """Create a view that projects over append delta parquet files.
+
+        If when run there are NO append deltas, which could be true immediately after a
+        metadata base create/recreate or append delta merge, we still create a view by
+        utilizing the schema from static_db.records but without any rows.  This allows us
+        to build additional downstream views on top of *this* view.  Also noting that a
+        call to .refresh() will recreate this view.
+        """
+        logger.debug("creating view of append deltas")
+
+        # get current append delta count
+        append_delta_count = conn.execute(
+            f"""
+            select count(*) as file_count
+            from glob('{self.append_deltas_path}/*.parquet')
+            """
+        ).fetchone()[
+            0
+        ]  # type: ignore[index]
+        logger.debug(f"{append_delta_count} append deltas found")
+
+        # if deltas, create view projecting over those parquet files
+        if append_delta_count > 0:
+            query = f"""
+            create view append_deltas as (
+                select *
+                from read_parquet(
+                    '{self.append_deltas_path}/*.parquet'
+                )
+            );
+            """
+
+        # if not, create a view that mirrors the structure of static_db.records
+        else:
+            query = """
+            create view append_deltas as (
+                select *
+                from static_db.records
+                where 1 = 0
+            );"""
+
+        conn.execute(query)
+
+    def _create_records_union_view(self, conn: DuckDBPyConnection) -> None:
+        logger.debug("creating view of unioned records")
+        conn.execute(
+            """
+            create view records as
+            (
+                select *
+                from static_db.records
+                union all
+                select *
+                from append_deltas
+            );
+            """
+        )
+
+    def _create_current_records_view(self, conn: DuckDBPyConnection) -> None:
+        """Create a view of current records.
+
+        This view builds on the table `records`.
+
+        This view includes only the most current version of each record in the dataset.
+        Because it includes the `timdex_record_id` and `run_id`, it makes yielding the
+        current version of a record via a TIMDEXDataset instance trivial: for any given
+        `timdex_record_id` if the `run_id` doesn't match, it's not the current version.
+        """
+        logger.info("creating view of current records metadata")
+
+        query = f"""
+        create or replace view current_records as
+        with ranked_records as (
+            select
+                r.*,
+                row_number() over (
+                    partition by r.timdex_record_id
+                    order by r.run_timestamp desc
+                ) as rn
+            from records r
+            where r.run_timestamp >= (
+                select max(r2.run_timestamp)
+                from records r2
+                where r2.source = r.source
+                and r2.run_type = 'full'
+            )
+        )
+        select
+            {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+        from ranked_records
+        where rn = 1;
+        """
+        conn.execute(query)
 
     def write_append_delta_duckdb(self, filepath: str) -> None:
         """Write an append delta for an ETL parquet file.
