@@ -18,6 +18,7 @@ import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+from duckdb import DuckDBPyConnection
 from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
@@ -128,6 +129,9 @@ class TIMDEXDataset:
         # dataset metadata
         self.metadata = TIMDEXDatasetMetadata(location)
 
+        # DuckDB context
+        self.conn = self.setup_duckdb_context()
+
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
         scheme = urlparse(self.location).scheme
@@ -220,6 +224,24 @@ class TIMDEXDataset:
             region=session.region_name,
             session_token=credentials.token,
         )
+
+    def setup_duckdb_context(self) -> DuckDBPyConnection:
+        """Create a DuckDB connection that metadata and data query and retrieval.
+
+        This relies on TIMDEXDatasetMetadata.setup_duckdb_context() to produce a DuckDB
+        connection that has all metadata already created.
+        """
+        start_time = time.perf_counter()
+
+        conn = self.metadata.conn
+
+        # create data schema
+        conn.execute("""create schema data;""")
+
+        logger.debug(
+            f"DuckDB data context created, {round(time.perf_counter()-start_time,2)}s"
+        )
+        return conn
 
     def write(
         self,

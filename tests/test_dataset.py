@@ -8,6 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
+from duckdb.duckdb import DuckDBPyConnection
 from pyarrow import fs
 
 from timdex_dataset_api.dataset import (
@@ -291,3 +292,21 @@ def test_dataset_records_data_structure_is_idempotent(timdex_dataset_with_runs):
     assert os.path.exists(timdex_dataset_with_runs.data_records_root)
     end_file_count = glob.glob(f"{timdex_dataset_with_runs.data_records_root}/**/*")
     assert start_file_count == end_file_count
+
+
+def test_dataset_duckdb_context_crated_on_init(timdex_dataset):
+    assert isinstance(timdex_dataset.conn, DuckDBPyConnection)
+
+
+def test_dataset_duckdb_context_creates_data_schema(timdex_dataset):
+    assert (
+        timdex_dataset.conn.query(
+            """
+            select count(*)
+            from information_schema.schemata
+            where catalog_name = 'memory'
+            and schema_name = 'data';
+            """
+        ).fetchone()[0]
+        == 1
+    )

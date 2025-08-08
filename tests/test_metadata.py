@@ -36,6 +36,20 @@ def test_tdm_init_metadata_file_found_success(timdex_metadata):
     assert isinstance(timdex_metadata.conn, DuckDBPyConnection)
 
 
+def test_tdm_duckdb_context_creates_metadata_schema(timdex_metadata):
+    assert (
+        timdex_metadata.conn.query(
+            """
+            select count(*)
+            from information_schema.schemata
+            where catalog_name = 'memory'
+            and schema_name = 'metadata';
+            """
+        ).fetchone()[0]
+        == 1
+    )
+
+
 def test_tdm_connection_has_static_database_attached(timdex_metadata):
     assert set(
         timdex_metadata.conn.query("""show databases;""").to_df().database_name
@@ -71,7 +85,9 @@ def test_tdm_views_created_on_init(timdex_metadata):
 
 
 def test_tdm_records_view_structure(timdex_metadata):
-    records_df = timdex_metadata.conn.query("""select * from records limit 1;""").to_df()
+    records_df = timdex_metadata.conn.query(
+        """select * from metadata.records limit 1;"""
+    ).to_df()
     expected_columns = {
         "timdex_record_id",
         "source",
@@ -88,7 +104,7 @@ def test_tdm_records_view_structure(timdex_metadata):
 
 def test_tdm_current_records_view_structure(timdex_metadata):
     current_records_df = timdex_metadata.conn.query(
-        """select * from current_records limit 1;"""
+        """select * from metadata.current_records limit 1;"""
     ).to_df()
     expected_columns = {
         "timdex_record_id",
@@ -106,7 +122,7 @@ def test_tdm_current_records_view_structure(timdex_metadata):
 
 def test_tdm_append_deltas_view_empty_structure(timdex_metadata):
     append_deltas_df = timdex_metadata.conn.query(
-        """select * from append_deltas;"""
+        """select * from metadata.append_deltas;"""
     ).to_df()
     expected_columns = {
         "timdex_record_id",
@@ -127,7 +143,7 @@ def test_tdm_records_count_property(timdex_metadata):
     assert timdex_metadata.records_count > 0
 
     manual_count = timdex_metadata.conn.query(
-        """select count(*) from records;"""
+        """select count(*) from metadata.records;"""
     ).fetchone()[0]
     assert timdex_metadata.records_count == manual_count
 
@@ -136,7 +152,7 @@ def test_tdm_current_records_count_property(timdex_metadata):
     assert timdex_metadata.current_records_count > 0
 
     manual_count = timdex_metadata.conn.query(
-        """select count(*) from current_records;"""
+        """select count(*) from metadata.current_records;"""
     ).fetchone()[0]
     assert timdex_metadata.current_records_count == manual_count
 
@@ -150,7 +166,7 @@ def test_tdm_records_equals_static_without_deltas(timdex_metadata):
         """select count(*) from static_db.records;"""
     ).fetchone()[0]
     records_count = timdex_metadata.conn.query(
-        """select count(*) from records;"""
+        """select count(*) from metadata.records;"""
     ).fetchone()[0]
     assert static_count == records_count
 
@@ -198,7 +214,7 @@ def test_tdm_current_records_with_deltas_logic(timdex_metadata_with_deltas):
 
     # verify current records view returns unique timdex_record_id values
     current_records_df = timdex_metadata_with_deltas.conn.query(
-        """select timdex_record_id from current_records;"""
+        """select timdex_record_id from metadata.current_records;"""
     ).to_df()
 
     unique_count = len(current_records_df.timdex_record_id.unique())
@@ -210,7 +226,7 @@ def test_tdm_current_records_most_recent_version(timdex_metadata_with_deltas):
     multi_version_records = timdex_metadata_with_deltas.conn.query(
         """
         select timdex_record_id, count(*) as version_count
-        from records
+        from metadata.records
         group by timdex_record_id
         having count(*) > 1
         limit 1;
@@ -224,7 +240,7 @@ def test_tdm_current_records_most_recent_version(timdex_metadata_with_deltas):
         most_recent = timdex_metadata_with_deltas.conn.query(
             f"""
             select run_timestamp, run_id
-            from records
+            from metadata.records
             where timdex_record_id = '{record_id}'
             order by run_timestamp desc
             limit 1;
@@ -235,7 +251,7 @@ def test_tdm_current_records_most_recent_version(timdex_metadata_with_deltas):
         current_version = timdex_metadata_with_deltas.conn.query(
             f"""
             select run_timestamp, run_id
-            from current_records
+            from metadata.current_records
             where timdex_record_id = '{record_id}';
             """
         ).to_df()

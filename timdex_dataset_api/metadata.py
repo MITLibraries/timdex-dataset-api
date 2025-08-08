@@ -91,17 +91,35 @@ class TIMDEXDatasetMetadata:
     @property
     def records_count(self) -> int:
         """Count of all records in dataset."""
-        return self.conn.query("""select count(*) from records;""").fetchone()[0]  # type: ignore[index]
+        return self.conn.query(
+            """
+            select count(*) from metadata.records;
+            """
+        ).fetchone()[
+            0
+        ]  # type: ignore[index]
 
     @property
     def current_records_count(self) -> int:
         """Count of all current records in dataset."""
-        return self.conn.query("""select count(*) from current_records;""").fetchone()[0]  # type: ignore[index]
+        return self.conn.query(
+            """
+            select count(*) from metadata.current_records;
+            """
+        ).fetchone()[
+            0
+        ]  # type: ignore[index]
 
     @property
     def append_deltas_count(self) -> int:
         """Count of all append deltas."""
-        return self.conn.query("""select count(*) from append_deltas;""").fetchone()[0]  # type: ignore[index]
+        return self.conn.query(
+            """
+            select count(*) from metadata.append_deltas;
+            """
+        ).fetchone()[
+            0
+        ]  # type: ignore[index]
 
     def create_metadata_structure(self) -> None:
         """Ensure metadata structure exists in TIDMEX dataset.."""
@@ -280,13 +298,16 @@ class TIMDEXDatasetMetadata:
             )
             return conn
 
+        # create metadata schema
+        conn.execute("create schema metadata;")
+
         self._attach_database_file(conn)
         self._create_append_deltas_view(conn)
         self._create_records_union_view(conn)
         self._create_current_records_view(conn)
 
         logger.debug(
-            f"DuckDB context created, {round(time.perf_counter()-start_time,2)}s"
+            f"DuckDB metadata context created, {round(time.perf_counter()-start_time,2)}s"
         )
         return conn
 
@@ -327,7 +348,7 @@ class TIMDEXDatasetMetadata:
         # if deltas, create view projecting over those parquet files
         if append_delta_count > 0:
             query = f"""
-            create view append_deltas as (
+            create or replace view metadata.append_deltas as (
                 select *
                 from read_parquet(
                     '{self.append_deltas_path}/*.parquet'
@@ -338,7 +359,7 @@ class TIMDEXDatasetMetadata:
         # if not, create a view that mirrors the structure of static_db.records
         else:
             query = """
-            create view append_deltas as (
+            create or replace view metadata.append_deltas as (
                 select *
                 from static_db.records
                 where 1 = 0
@@ -350,13 +371,13 @@ class TIMDEXDatasetMetadata:
         logger.debug("creating view of unioned records")
         conn.execute(
             """
-            create view records as
+            create or replace view metadata.records as
             (
                 select *
                 from static_db.records
                 union all
                 select *
-                from append_deltas
+                from metadata.append_deltas
             );
             """
         )
@@ -374,7 +395,7 @@ class TIMDEXDatasetMetadata:
         logger.info("creating view of current records metadata")
 
         query = f"""
-        create or replace view current_records as
+        create or replace view metadata.current_records as
         with ranked_records as (
             select
                 r.*,
@@ -382,10 +403,10 @@ class TIMDEXDatasetMetadata:
                     partition by r.timdex_record_id
                     order by r.run_timestamp desc
                 ) as rn
-            from records r
+            from metadata.records r
             where r.run_timestamp >= (
                 select max(r2.run_timestamp)
-                from records r2
+                from metadata.records r2
                 where r2.source = r.source
                 and r2.run_type = 'full'
             )
