@@ -54,7 +54,7 @@ line-length = 90
 [tool.mypy]
 disallow_untyped_calls = true
 disallow_untyped_defs = true
-exclude = ["tests/", "output/"]
+exclude = ["tests/", "output/", "migrations/"]
 
 [[tool.mypy.overrides]]
 module = []
@@ -95,6 +95,8 @@ ignore = [
     "PLR0915",
     "S321",
     "S608",
+    "TD002",
+    "TD003",
     "TRY003"
 ]
 

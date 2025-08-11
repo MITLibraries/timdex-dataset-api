@@ -6,12 +6,10 @@ from unittest.mock import patch
 
 import pyarrow.dataset as ds
 import pyarrow.parquet as pq
-import pytest
 
 from tests.utils import generate_sample_records
 from timdex_dataset_api.dataset import (
     TIMDEX_DATASET_SCHEMA,
-    TIMDEXDataset,
 )
 from timdex_dataset_api.metadata import ORDERED_METADATA_COLUMN_NAMES
 
@@ -20,11 +18,10 @@ def test_dataset_write_records_to_timdex_dataset_empty(
     timdex_dataset_empty, sample_records_generator
 ):
     written_files = timdex_dataset_empty.write(sample_records_generator(10_000))
-    timdex_dataset_empty.load()
 
     assert len(written_files) == 1
     assert os.path.exists(timdex_dataset_empty.location)
-    assert timdex_dataset_empty.row_count == 10_000
+    assert timdex_dataset_empty.dataset.count_rows() == 10_000
 
 
 def test_dataset_write_default_max_rows_per_file(
@@ -36,9 +33,8 @@ def test_dataset_write_default_max_rows_per_file(
     total_records = 200_033
 
     timdex_dataset_empty.write(sample_records_generator(total_records))
-    timdex_dataset_empty.load()
 
-    assert timdex_dataset_empty.row_count == total_records
+    assert timdex_dataset_empty.dataset.count_rows() == total_records
     assert len(timdex_dataset_empty.dataset.files) == math.ceil(
         total_records / default_max_rows_per_file
     )
@@ -57,20 +53,6 @@ def test_dataset_write_record_batches_uses_batch_size(
     assert len(batches) == math.ceil(
         total_records / timdex_dataset_empty.config.write_batch_size
     )
-
-
-@pytest.mark.skip(
-    reason="Test unneeded soon when list[str] not supported for dataset location."
-)
-def test_dataset_write_to_multiple_locations_raise_error(sample_records_generator):
-    timdex_dataset = TIMDEXDataset(
-        location=["/path/to/records-1.parquet", "/path/to/records-2.parquet"]
-    )
-    with pytest.raises(
-        TypeError,
-        match="Dataset location must be the root of a single dataset for writing",
-    ):
-        timdex_dataset.write(sample_records_generator(10))
 
 
 def test_dataset_write_schema_applied_to_dataset(
@@ -103,20 +85,18 @@ def test_dataset_write_partition_for_multiple_sources(
 ):
     # perform write for source="alma" and run_date="2024-12-01"
     written_files_source_a = timdex_dataset_empty.write(sample_records_generator(10))
-    timdex_dataset_empty.load()
 
     assert os.path.exists(written_files_source_a[0].path)
-    assert timdex_dataset_empty.row_count == 10
+    assert timdex_dataset_empty.dataset.count_rows() == 10
 
     # perform write for source="libguides" and run_date="2024-12-01"
     written_files_source_b = timdex_dataset_empty.write(
         generate_sample_records(num_records=7, source="libguides")
     )
-    timdex_dataset_empty.load()
 
     assert os.path.exists(written_files_source_b[0].path)
     assert os.path.exists(written_files_source_a[0].path)
-    assert timdex_dataset_empty.row_count == 17
+    assert timdex_dataset_empty.dataset.count_rows() == 17
 
 
 def test_dataset_write_partition_ignore_existing_data(
@@ -125,12 +105,11 @@ def test_dataset_write_partition_ignore_existing_data(
     # perform two (2) writes for source="alma" and run_date="2024-12-01"
     written_files_source_a0 = timdex_dataset_empty.write(sample_records_generator(10))
     written_files_source_a1 = timdex_dataset_empty.write(sample_records_generator(10))
-    timdex_dataset_empty.load()
 
     # assert that both files exist and no overwriting occurs
     assert os.path.exists(written_files_source_a0[0].path)
     assert os.path.exists(written_files_source_a1[0].path)
-    assert timdex_dataset_empty.row_count == 20
+    assert timdex_dataset_empty.dataset.count_rows() == 20
 
 
 @patch("timdex_dataset_api.dataset.uuid.uuid4")
@@ -148,11 +127,10 @@ def test_dataset_write_partition_overwrite_files_with_same_name(
     # perform two (2) writes for source="alma" and run_date="2024-12-01"
     _ = timdex_dataset_empty.write(sample_records_generator(10))
     written_files_source_a1 = timdex_dataset_empty.write(sample_records_generator(7))
-    timdex_dataset_empty.load()
 
     # assert that only the second file exists and overwriting occurs
     assert os.path.exists(written_files_source_a1[0].path)
-    assert timdex_dataset_empty.row_count == 7
+    assert timdex_dataset_empty.dataset.count_rows() == 7
 
 
 def test_dataset_write_single_append_delta_success(
