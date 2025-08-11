@@ -59,6 +59,7 @@ TDA_BATCH_READ_AHEAD=# Number of batches to optimistically read ahead when batch
 TDA_FRAGMENT_READ_AHEAD=# Number of fragments to optimistically read ahead when batch reaching from a dataset; pyarrow default is 4
 TDA_DUCKDB_MEMORY_LIMIT=# Memory limit for DuckDB connection
 TDA_DUCKDB_THREADS=# Thread limit for DuckDB connection
+TDA_DUCKDB_JOIN_BATCH_SIZE=# Batch size for metadata + data joins, 100k default and recommended
 ```
 
 ## Local S3 via MinIO
@@ -97,6 +98,8 @@ WARNING_ONLY_LOGGERS=asyncio,botocore,urllib3,s3transfer,boto3
 ```
 
 ### Reading Data
+
+See [docs/reading.md](docs/reading.md) for an in-depth guide and Mermaid diagram.
 
 First, import the library:
 ```python

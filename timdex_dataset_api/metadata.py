@@ -6,14 +6,23 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Unpack
 from urllib.parse import urlparse
 
 import duckdb
 from duckdb import DuckDBPyConnection
+from duckdb_engine import Dialect as DuckDBDialect
+from sqlalchemy import Table, and_, select, text
 
 from timdex_dataset_api.config import configure_logger
-from timdex_dataset_api.utils import S3Client
+from timdex_dataset_api.utils import (
+    S3Client,
+    build_filter_expr_sa,
+    sa_reflect_duckdb_conn,
+)
+
+if TYPE_CHECKING:
+    from timdex_dataset_api.dataset import DatasetFilters
 
 logger = configure_logger(__name__)
 
@@ -62,6 +71,7 @@ class TIMDEXDatasetMetadata:
 
         self.create_metadata_structure()
         self.conn: DuckDBPyConnection = self.setup_duckdb_context()
+        self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
 
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
@@ -199,6 +209,15 @@ class TIMDEXDatasetMetadata:
             s3_client = S3Client()
             return s3_client.object_exists(self.metadata_database_path)
         return os.path.exists(self.metadata_database_path)
+
+    def get_sa_table(self, table: str) -> Table:
+        """Get SQLAlchemy Table from reflected SQLAlchemy metadata."""
+        schema_table = f"metadata.{table}"
+        if schema_table not in self._sa_metadata.tables:
+            raise ValueError(
+                f"Could not find table '{table}' in DuckDB schema 'metadata'."
+            )
+        return self._sa_metadata.tables[schema_table]
 
     def refresh(self) -> None:
         """Refresh DuckDB connection on self."""
@@ -453,3 +472,41 @@ class TIMDEXDatasetMetadata:
         logger.debug(
             f"Append delta written: {output_path}, {time.perf_counter()-start_time}s"
         )
+
+    def build_meta_query(
+        self, table: str, where: str | None, **filters: Unpack["DatasetFilters"]
+    ) -> str:
+        """Build SQL query using SQLAlchemy against metadata schema tables and views."""
+        sa_table = self.get_sa_table(table)
+
+        # build WHERE clause filter expression based on any passed key/value filters
+        # and/or an explicit WHERE string
+        filter_expr = build_filter_expr_sa(sa_table, **filters)
+        if where is not None and where.strip():
+            text_where = text(where)
+            combined = (
+                and_(filter_expr, text_where) if filter_expr is not None else text_where
+            )
+        else:
+            combined = filter_expr
+
+        # create SQL statement object
+        stmt = select(
+            sa_table.c.timdex_record_id,
+            sa_table.c.run_id,
+            sa_table.c.run_record_offset,
+            sa_table.c.filename,
+        ).select_from(sa_table)
+        if combined is not None:
+            stmt = stmt.where(combined)
+        stmt = stmt.order_by(sa_table.c.filename, sa_table.c.run_record_offset)
+
+        # using DuckDB dialect, compile to SQL string
+        compiled = stmt.compile(
+            dialect=DuckDBDialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+        compiled_str = str(compiled)
+        logger.debug(compiled_str)
+
+        return compiled_str
