@@ -220,8 +220,9 @@ class TIMDEXDatasetMetadata:
         return self._sa_metadata.tables[schema_table]
 
     def refresh(self) -> None:
-        """Refresh DuckDB connection on self."""
+        """Refresh DuckDB connection and reflected SQLAlchemy metadata on self."""
         self.conn = self.setup_duckdb_context()
+        self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
 
     def recreate_static_database_file(self) -> None:
         """Create/recreate the static metadata database file.

@@ -109,6 +109,11 @@ def timdex_dataset_multi_source(tmp_path) -> TIMDEXDataset:
             ),
             write_append_deltas=False,
         )
+
+    # ensure static metadata database exists for read methods
+    dataset.metadata.recreate_static_database_file()
+    dataset.metadata.refresh()
+
     return dataset
 
 
@@ -162,6 +167,10 @@ def timdex_dataset_with_runs(tmp_path, timdex_dataset_config_small) -> TIMDEXDat
             ),
             write_append_deltas=False,
         )
+
+    # We intentionally DO NOT create the static metadata here since some tests
+    # expect it to be missing initially. Use a separate fixture when metadata is required.
+
     return dataset
 
 
@@ -210,7 +219,18 @@ def timdex_metadata(timdex_dataset_with_runs) -> TIMDEXDatasetMetadata:
     """TIMDEXDatasetMetadata with static database file created."""
     metadata = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
     metadata.recreate_static_database_file()
+    metadata.refresh()
     return metadata
+
+
+@pytest.fixture
+def timdex_dataset_with_runs_with_metadata(
+    timdex_dataset_with_runs,
+) -> TIMDEXDataset:
+    """TIMDEXDataset with runs and static metadata created for read tests."""
+    timdex_dataset_with_runs.metadata.recreate_static_database_file()
+    timdex_dataset_with_runs.metadata.refresh()
+    return timdex_dataset_with_runs
 
 
 @pytest.fixture
