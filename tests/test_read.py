@@ -1,9 +1,10 @@
-# ruff: noqa: PLR2004
+# ruff: noqa: D205, D209, PLR2004
 
 
 import pandas as pd
 import pyarrow as pa
 import pytest
+from duckdb import ParserException
 
 from timdex_dataset_api.dataset import TIMDEX_DATASET_SCHEMA
 
@@ -91,6 +92,64 @@ def test_read_transformed_records_yields_parsed_dictionary(timdex_dataset_multi_
     transformed_record = next(batches)
     assert isinstance(transformed_record, dict)
     assert transformed_record == {"title": ["Hello World."]}
+
+
+def test_read_batches_where_filters_response(timdex_dataset_multi_source):
+    df_all = timdex_dataset_multi_source.read_dataframe()
+    total_count = len(df_all)
+
+    where = (
+        "source = 'libguides' AND run_date = '2024-12-01' AND "
+        "run_type = 'daily' AND action = 'index'"
+    )
+    df_where = timdex_dataset_multi_source.read_dataframe(where=where)
+
+    assert len(df_where) == 1_000
+    assert len(df_where) < total_count
+
+
+def test_read_batches_where_and_dataset_filters_are_combined(timdex_dataset_multi_source):
+    """Test that when key/value DatasetFilters AND a SQL where clause is provided, they
+    are combined in the final DuckDB SQL query."""
+    where = "run_date = '2024-12-01' AND run_type = 'daily'"
+    df = timdex_dataset_multi_source.read_dataframe(
+        where=where, source="libguides", action="index"
+    )
+    assert len(df) == 1_000
+    assert set(df["source"].unique().tolist()) == {"libguides"}
+    assert set(df["action"].unique().tolist()) == {"index"}
+
+
+@pytest.mark.parametrize(
+    "bad_where",
+    [
+        "SELECT * FROM current_records WHERE source = 'libguides'",
+        "FROM records WHERE source = 'libguides'",
+        "source = 'libguides';",
+        " run_date = '2024-12-01';  ",
+    ],
+)
+def test_read_batches_where_rejects_non_predicate_sql(
+    timdex_dataset_multi_source, bad_where
+):
+    with pytest.raises(ParserException):
+        next(timdex_dataset_multi_source.read_batches_iter(where=bad_where))
+
+
+def test_read_dataframe_respects_where(timdex_dataset_multi_source):
+    where = "source = 'libguides' AND action = 'index'"
+    df = timdex_dataset_multi_source.read_dataframe(where=where)
+    assert len(df) > 0
+    assert set(df["source"].unique().tolist()) == {"libguides"}
+    assert set(df["action"].unique().tolist()) == {"index"}
+
+
+def test_read_dicts_iter_respects_where_and_filters(timdex_dataset_multi_source):
+    where = "run_type = 'daily'"
+    it = timdex_dataset_multi_source.read_dicts_iter(where=where, source="libguides")
+    first = next(it)
+    assert first["run_type"] == "daily"
+    assert first["source"] == "libguides"
 
 
 def test_dataset_all_current_records_deduped(timdex_dataset_with_runs_with_metadata):
