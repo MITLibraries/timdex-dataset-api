@@ -99,8 +99,6 @@ WARNING_ONLY_LOGGERS=asyncio,botocore,urllib3,s3transfer,boto3
 
 ### Reading Data
 
-See [docs/reading.md](docs/reading.md) for an in-depth guide and Mermaid diagram.
-
 First, import the library:
 ```python
 from timdex_dataset_api import TIMDEXDataset
@@ -149,6 +147,8 @@ run_df = timdex_dataset.read_dataframe(
     run_id="def456"
 )
 ```
+
+See [docs/reading.md](docs/reading.md) for more information.
 
 ### Writing Data
 
