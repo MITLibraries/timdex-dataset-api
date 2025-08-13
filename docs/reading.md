@@ -43,10 +43,15 @@ Important: `where=` must be only a WHERE predicate (no `SELECT`/`FROM`/`;`). The
 
 This pattern keeps reads fast and memory-efficient even for large datasets.
 
-The following diagram shows the flow for a query like:
+The following diagram shows the flow for an example query:
 
 ```python
-for record_dict in td.read_dicts_iter(table="records", source="dspace", run_date="2025-09-01", run_id="abc123"):
+for record_dict in td.read_dicts_iter(
+    table="records",
+    source="dspace",
+    run_date="2025-09-01",
+    run_id="abc123"
+):
     # process record...
 ```
 
@@ -68,7 +73,7 @@ sequenceDiagram
     D-->>TD: lightweight result set (file + offsets)
 
     TD->>D: Build and run data query using metadata
-    Note right of D: (Data query)<br><br>SELECT <COLUMNS><br>FROM read_parquet(P.files) d<br>JOIN meta m<br>USING (timdex_record_id, run_id, run_record_offset)<br>WHERE d.source = 'dspace' AND d.run_id = 'abc123'
+    Note right of D: (Data query)<br><br>SELECT <COLUMNS><br>FROM read_parquet(P.files) d<br>JOIN meta m<br>USING (timdex_record_id, run_id, run_record_offset)
 
     D-->>TD: batches of rows
     TD-->>U: iterator of dicts (one dict per row)
