@@ -244,7 +244,7 @@ def test_dataset_records_data_structure_is_idempotent(timdex_dataset_with_runs):
     assert start_file_count == end_file_count
 
 
-def test_dataset_duckdb_context_crated_on_init(timdex_dataset):
+def test_dataset_duckdb_context_created_on_init(timdex_dataset):
     assert isinstance(timdex_dataset.conn, DuckDBPyConnection)
 
 

@@ -350,53 +350,6 @@ class TIMDEXDataset:
             f"total size: {total_size}"
         )
 
-    def _iter_meta_chunks(self, meta_df: pd.DataFrame) -> Iterator[pd.DataFrame]:
-        """Utility method to yield chunks of metadata query results."""
-        for start in range(0, len(meta_df), self.config.duckdb_join_batch_size):
-            yield meta_df.iloc[start : start + self.config.duckdb_join_batch_size]
-
-    def _build_parquet_file_list(self, meta_chunk_df: pd.DataFrame) -> str:
-        """Build SQL list of parquet filepaths."""
-        filenames = meta_chunk_df["filename"].unique().tolist()
-        if self.location_scheme == "s3":
-            filenames = [f"s3://{f.removeprefix('s3://')}" for f in filenames]
-        return "[" + ",".join((f"'{f}'") for f in filenames) + "]"
-
-    def _build_data_query_for_chunk(
-        self,
-        columns: list[str] | None,
-        meta_chunk_df: pd.DataFrame,
-        registered_metadata_chunk: str = "meta_chunk",
-    ) -> str:
-        """Build SQL query used for data retrieval, joining on metadata data."""
-        parquet_list_sql = self._build_parquet_file_list(meta_chunk_df)
-        rro_list_sql = ",".join(
-            str(rro) for rro in meta_chunk_df["run_record_offset"].unique()
-        )
-        select_cols = ",".join(
-            [f"ds.{col}" for col in (columns or TIMDEX_DATASET_SCHEMA.names)]
-        )
-        return f"""
-            select
-                {select_cols}
-            from read_parquet(
-                {parquet_list_sql},
-                hive_partitioning=true,
-                filename=true
-            ) as ds
-            inner join {registered_metadata_chunk} mc using (
-                timdex_record_id, run_id, run_record_offset
-            )
-            where ds.run_record_offset in ({rro_list_sql});
-            """
-
-    def _stream_data_query_batches(self, data_query: str) -> Iterator[pa.RecordBatch]:
-        """Yield pyarrow RecordBatches from a SQL query."""
-        self.conn.execute("set enable_progress_bar = false;")
-        cursor = self.conn.execute(data_query)
-        yield from cursor.fetch_record_batch(rows_per_batch=self.config.read_batch_size)
-        self.conn.execute("set enable_progress_bar = true;")
-
     def read_batches_iter(
         self,
         table: str = "records",
@@ -456,6 +409,53 @@ class TIMDEXDataset:
                 f"read_batches_iter batch {i+1}, yielded: {batch_yield_count} "
                 f"@ {batch_rps} records/second, total yielded: {total_yield_count}"
             )
+
+    def _iter_meta_chunks(self, meta_df: pd.DataFrame) -> Iterator[pd.DataFrame]:
+        """Utility method to yield chunks of metadata query results."""
+        for start in range(0, len(meta_df), self.config.duckdb_join_batch_size):
+            yield meta_df.iloc[start : start + self.config.duckdb_join_batch_size]
+
+    def _build_parquet_file_list(self, meta_chunk_df: pd.DataFrame) -> str:
+        """Build SQL list of parquet filepaths."""
+        filenames = meta_chunk_df["filename"].unique().tolist()
+        if self.location_scheme == "s3":
+            filenames = [f"s3://{f.removeprefix('s3://')}" for f in filenames]
+        return "[" + ",".join((f"'{f}'") for f in filenames) + "]"
+
+    def _build_data_query_for_chunk(
+        self,
+        columns: list[str] | None,
+        meta_chunk_df: pd.DataFrame,
+        registered_metadata_chunk: str = "meta_chunk",
+    ) -> str:
+        """Build SQL query used for data retrieval, joining on metadata data."""
+        parquet_list_sql = self._build_parquet_file_list(meta_chunk_df)
+        rro_list_sql = ",".join(
+            str(rro) for rro in meta_chunk_df["run_record_offset"].unique()
+        )
+        select_cols = ",".join(
+            [f"ds.{col}" for col in (columns or TIMDEX_DATASET_SCHEMA.names)]
+        )
+        return f"""
+            select
+                {select_cols}
+            from read_parquet(
+                {parquet_list_sql},
+                hive_partitioning=true,
+                filename=true
+            ) as ds
+            inner join {registered_metadata_chunk} mc using (
+                timdex_record_id, run_id, run_record_offset
+            )
+            where ds.run_record_offset in ({rro_list_sql});
+            """
+
+    def _stream_data_query_batches(self, data_query: str) -> Iterator[pa.RecordBatch]:
+        """Yield pyarrow RecordBatches from a SQL query."""
+        self.conn.execute("set enable_progress_bar = false;")
+        cursor = self.conn.execute(data_query)
+        yield from cursor.fetch_record_batch(rows_per_batch=self.config.read_batch_size)
+        self.conn.execute("set enable_progress_bar = true;")
 
     def read_dataframes_iter(
         self,
