@@ -467,6 +467,79 @@ class TIMDEXDatasetMetadata:
         """
         conn.execute(query)
 
+    def merge_append_deltas(self) -> None:
+        """Merge append deltas into the static metadata database file."""
+        logger.info("merging append deltas into static metadata database file")
+
+        start_time = time.perf_counter()
+
+        s3_client = S3Client()
+
+        # get filenames of append deltas
+        append_delta_filenames = (
+            self.conn.query(
+                """
+                select distinct(append_delta_filename)
+                from metadata.append_deltas
+                """
+            )
+            .to_df()["append_delta_filename"]
+            .to_list()
+        )
+
+        if len(append_delta_filenames) == 0:
+            logger.info("no append deltas found")
+            return
+
+        logger.debug(f"{len(append_delta_filenames)} append deltas found")
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            # create local copy of the static metadata database (static db) file
+            local_db_path = str(Path(temp_dir) / self.metadata_database_filename)
+            if self.location_scheme == "s3":
+                s3_client.download_file(
+                    s3_uri=self.metadata_database_path, local_path=local_db_path
+                )
+            else:
+                shutil.copy(src=self.metadata_database_path, dst=local_db_path)
+
+            # attach to local static db
+            self.conn.execute(f"""attach '{local_db_path}' AS local_static_db;""")
+
+            # insert records from append deltas to local static db
+            self.conn.execute(
+                f"""
+                insert into local_static_db.records
+                select
+                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+                from metadata.append_deltas
+                """
+            )
+
+            # detach from local static db
+            self.conn.execute("""detach local_static_db;""")
+
+            # overwrite static db file with local version
+            if self.location_scheme == "s3":
+                s3_client.upload_file(
+                    local_db_path,
+                    self.metadata_database_path,
+                )
+            else:
+                shutil.copy(src=local_db_path, dst=self.metadata_database_path)
+
+        # delete append deltas
+        for append_delta_filename in append_delta_filenames:
+            if self.location_scheme == "s3":
+                s3_client.delete_file(s3_uri=append_delta_filename)
+            else:
+                os.remove(append_delta_filename)
+
+        logger.debug(
+            "append deltas merged into the static metadata database file: "
+            f"{self.metadata_database_path}, {time.perf_counter()-start_time}s"
+        )
+
     def write_append_delta_duckdb(self, filepath: str) -> None:
         """Write an append delta for an ETL parquet file.
 

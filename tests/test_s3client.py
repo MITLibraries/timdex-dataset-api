@@ -42,6 +42,22 @@ def test_split_s3_uri_invalid():
         client._split_s3_uri("timdex/path/to/file.txt")
 
 
+def test_list_objects(s3_bucket_mocked, tmp_path):
+    client = S3Client()
+
+    # Create a test file
+    test_file = tmp_path / "test.txt"
+    test_file.write_text("test content")
+
+    # Upload the file
+    s3_uri = "s3://timdex/metadata/append_deltas/test.txt"
+    client.upload_file(test_file, s3_uri)
+
+    # Verify list of objects
+    s3_prefix = "s3://timdex/metadata/append_deltas"
+    assert client.list_objects(s3_prefix) == ["metadata/append_deltas/test.txt"]
+
+
 def test_upload_download_file(s3_bucket_mocked, tmp_path):
     """Test upload_file and download_file methods."""
     client = S3Client()
