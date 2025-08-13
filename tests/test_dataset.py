@@ -8,6 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
+from duckdb import ConversionException
+from duckdb.duckdb import DuckDBPyConnection
 from pyarrow import fs
 
 from timdex_dataset_api.dataset import (
@@ -143,111 +145,58 @@ def test_dataset_load_s3_sets_filesystem_and_dataset_success(
     assert timdex_dataset.dataset == mock_pyarrow_ds.return_value
 
 
-def test_dataset_get_filtered_dataset_with_single_nonpartition_success(
-    timdex_dataset_multi_source,
-):
-    filtered_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
-        run_id="abc123",
-    )
-    filtered_local_df = filtered_timdex_dataset.to_table().to_pandas()
-
-    # timdex_dataset_multi_source consists of single 'run_id' value
-    # therefore, filtered_timdex_dataset includes all records
-    assert len(filtered_local_df) == filtered_timdex_dataset.count_rows()
-    assert filtered_local_df["run_id"].unique() == ["abc123"]
+def test_filters_single_nonpartition_success(timdex_dataset_multi_source):
+    df = timdex_dataset_multi_source.read_dataframe(run_id="abc123")
+    assert df is not None
+    assert set(df["run_id"].unique().tolist()) == {"abc123"}
 
 
-def test_dataset_get_filtered_dataset_with_multi_nonpartition_filters_success(
-    timdex_dataset_multi_source,
-):
-    filtered_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
+def test_filters_multi_nonpartition_success(timdex_dataset_multi_source):
+    df = timdex_dataset_multi_source.read_dataframe(
         timdex_record_id="alma:0",
         source="alma",
         run_type="daily",
         run_id="abc123",
         action="index",
     )
-    filtered_local_df = filtered_timdex_dataset.to_table().to_pandas()
-
-    assert len(filtered_local_df) == 1
-    assert filtered_local_df["timdex_record_id"].iloc[0] == "alma:0"
-
-
-def test_dataset_get_filtered_dataset_with_or_nonpartition_filters_success(
-    timdex_dataset_multi_source,
-):
-    filtered_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
-        timdex_record_id=["alma:0", "alma:1"]
-    )
-    filtered_local_df = filtered_timdex_dataset.to_table().to_pandas()
-    assert len(filtered_local_df) == 2
-    assert filtered_local_df["timdex_record_id"].tolist() == ["alma:0", "alma:1"]
+    assert df is not None
+    assert len(df) == 1
+    assert df.iloc[0]["timdex_record_id"] == "alma:0"
 
 
-def test_dataset_get_filtered_dataset_with_run_date_str_successs(
-    timdex_dataset_multi_source,
-):
-    filtered_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
-        run_date="2024-12-01"
-    )
-    empty_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
-        run_date="2024-12-02"
-    )
-
-    # timdex_dataset_multi_source consists of single 'run_date' value
-    # therefore, filtered_timdex_dataset includes all records
-    assert (
-        filtered_timdex_dataset.count_rows()
-        == timdex_dataset_multi_source.dataset.count_rows()
-    )
-    assert empty_timdex_dataset.count_rows() == 0
+def test_filters_or_nonpartition_success(timdex_dataset_multi_source):
+    df = timdex_dataset_multi_source.read_dataframe(timdex_record_id=["alma:0", "alma:1"])
+    assert df is not None
+    assert set(df["timdex_record_id"].tolist()) == {"alma:0", "alma:1"}
 
 
-def test_dataset_get_filtered_dataset_with_run_date_obj_success(
-    timdex_dataset_multi_source,
-):
-    filtered_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
-        run_date=date(2024, 12, 1)
-    )
-    empty_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
-        run_date=date(2024, 12, 2)
-    )
-
-    # timdex_dataset_multi_source consists of single 'run_date' value
-    # therefore, filtered_timdex_dataset includes all records
-    assert (
-        filtered_timdex_dataset.count_rows()
-        == timdex_dataset_multi_source.dataset.count_rows()
-    )
-    assert empty_timdex_dataset.count_rows() == 0
+def test_filters_run_date_str_success(timdex_dataset_multi_source):
+    df = timdex_dataset_multi_source.read_dataframe(run_date="2024-12-01")
+    assert df is not None
+    df_empty = timdex_dataset_multi_source.read_dataframe(run_date="2024-12-02")
+    assert df_empty is None or len(df_empty) == 0
 
 
-def test_dataset_get_filtered_dataset_with_ymd_success(timdex_dataset_multi_source):
-    filtered_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(
-        year="2024"
-    )
-    empty_timdex_dataset = timdex_dataset_multi_source._get_filtered_dataset(year="2025")
-
-    # timdex_dataset_multi_source consists of single 'run_date' value
-    # therefore, filtered_timdex_dataset includes all records
-    assert (
-        filtered_timdex_dataset.count_rows()
-        == timdex_dataset_multi_source.dataset.count_rows()
-    )
-    assert empty_timdex_dataset.count_rows() == 0
+def test_filters_run_date_obj_success(timdex_dataset_multi_source):
+    df = timdex_dataset_multi_source.read_dataframe(run_date=date(2024, 12, 1))
+    assert df is not None
+    df_empty = timdex_dataset_multi_source.read_dataframe(run_date=date(2024, 12, 2))
+    assert df_empty is None or len(df_empty) == 0
 
 
-def test_dataset_get_filtered_dataset_with_run_date_invalid_raise_error(
-    timdex_dataset_multi_source,
-):
+def test_filters_ymd_success(timdex_dataset_multi_source):
+    # metadata filters do not expose partition y/m/d; use run_date equivalents
+    df = timdex_dataset_multi_source.read_dataframe(run_date=date(2024, 12, 1))
+    assert df is not None
+    df_empty = timdex_dataset_multi_source.read_dataframe(run_date=date(2025, 12, 1))
+    assert df_empty is None or len(df_empty) == 0
+
+
+def test_filters_run_date_invalid_raise_error(timdex_dataset_multi_source):
     with pytest.raises(
-        TypeError,
-        match=(
-            "Provided 'run_date' value must be a string matching format '%Y-%m-%d' "
-            "or a datetime.date."
-        ),
+        ConversionException, match="Conversion Error: Unimplemented type for cast"
     ):
-        _ = timdex_dataset_multi_source._get_filtered_dataset(run_date=999)
+        timdex_dataset_multi_source.read_dataframe(run_date=999)
 
 
 def test_dataset_get_s3_filesystem_success(mocker):
@@ -271,8 +220,10 @@ def test_dataset_timdex_dataset_row_count_success(timdex_dataset):
     assert timdex_dataset.dataset.count_rows() == timdex_dataset.dataset.count_rows()
 
 
-def test_dataset_all_records_not_current_and_not_deduped(timdex_dataset_with_runs):
-    all_records_df = timdex_dataset_with_runs.read_dataframe()
+def test_dataset_all_records_not_current_and_not_deduped(
+    timdex_dataset_with_runs_with_metadata,
+):
+    all_records_df = timdex_dataset_with_runs_with_metadata.read_dataframe()
 
     # assert counts reflect all records from dataset, no deduping
     assert all_records_df.source.value_counts().to_dict() == {"alma": 254, "dspace": 194}
@@ -291,3 +242,21 @@ def test_dataset_records_data_structure_is_idempotent(timdex_dataset_with_runs):
     assert os.path.exists(timdex_dataset_with_runs.data_records_root)
     end_file_count = glob.glob(f"{timdex_dataset_with_runs.data_records_root}/**/*")
     assert start_file_count == end_file_count
+
+
+def test_dataset_duckdb_context_created_on_init(timdex_dataset):
+    assert isinstance(timdex_dataset.conn, DuckDBPyConnection)
+
+
+def test_dataset_duckdb_context_creates_data_schema(timdex_dataset):
+    assert (
+        timdex_dataset.conn.query(
+            """
+            select count(*)
+            from information_schema.schemata
+            where catalog_name = 'memory'
+            and schema_name = 'data';
+            """
+        ).fetchone()[0]
+        == 1
+    )

@@ -6,14 +6,23 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Literal
+from typing import TYPE_CHECKING, Literal, Unpack
 from urllib.parse import urlparse
 
 import duckdb
 from duckdb import DuckDBPyConnection
+from duckdb_engine import Dialect as DuckDBDialect
+from sqlalchemy import Table, and_, select, text
 
 from timdex_dataset_api.config import configure_logger
-from timdex_dataset_api.utils import S3Client
+from timdex_dataset_api.utils import (
+    S3Client,
+    build_filter_expr_sa,
+    sa_reflect_duckdb_conn,
+)
+
+if TYPE_CHECKING:
+    from timdex_dataset_api.dataset import DatasetFilters
 
 logger = configure_logger(__name__)
 
@@ -62,6 +71,7 @@ class TIMDEXDatasetMetadata:
 
         self.create_metadata_structure()
         self.conn: DuckDBPyConnection = self.setup_duckdb_context()
+        self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
 
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
@@ -91,17 +101,35 @@ class TIMDEXDatasetMetadata:
     @property
     def records_count(self) -> int:
         """Count of all records in dataset."""
-        return self.conn.query("""select count(*) from records;""").fetchone()[0]  # type: ignore[index]
+        return self.conn.query(
+            """
+            select count(*) from metadata.records;
+            """
+        ).fetchone()[
+            0
+        ]  # type: ignore[index]
 
     @property
     def current_records_count(self) -> int:
         """Count of all current records in dataset."""
-        return self.conn.query("""select count(*) from current_records;""").fetchone()[0]  # type: ignore[index]
+        return self.conn.query(
+            """
+            select count(*) from metadata.current_records;
+            """
+        ).fetchone()[
+            0
+        ]  # type: ignore[index]
 
     @property
     def append_deltas_count(self) -> int:
         """Count of all append deltas."""
-        return self.conn.query("""select count(*) from append_deltas;""").fetchone()[0]  # type: ignore[index]
+        return self.conn.query(
+            """
+            select count(*) from metadata.append_deltas;
+            """
+        ).fetchone()[
+            0
+        ]  # type: ignore[index]
 
     def create_metadata_structure(self) -> None:
         """Ensure metadata structure exists in TIDMEX dataset.."""
@@ -182,9 +210,19 @@ class TIMDEXDatasetMetadata:
             return s3_client.object_exists(self.metadata_database_path)
         return os.path.exists(self.metadata_database_path)
 
+    def get_sa_table(self, table: str) -> Table:
+        """Get SQLAlchemy Table from reflected SQLAlchemy metadata."""
+        schema_table = f"metadata.{table}"
+        if schema_table not in self._sa_metadata.tables:
+            raise ValueError(
+                f"Could not find table '{table}' in DuckDB schema 'metadata'."
+            )
+        return self._sa_metadata.tables[schema_table]
+
     def refresh(self) -> None:
-        """Refresh DuckDB connection on self."""
+        """Refresh DuckDB connection and reflected SQLAlchemy metadata on self."""
         self.conn = self.setup_duckdb_context()
+        self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
 
     def recreate_static_database_file(self) -> None:
         """Create/recreate the static metadata database file.
@@ -280,13 +318,16 @@ class TIMDEXDatasetMetadata:
             )
             return conn
 
+        # create metadata schema
+        conn.execute("create schema metadata;")
+
         self._attach_database_file(conn)
         self._create_append_deltas_view(conn)
         self._create_records_union_view(conn)
         self._create_current_records_view(conn)
 
         logger.debug(
-            f"DuckDB context created, {round(time.perf_counter()-start_time,2)}s"
+            f"DuckDB metadata context created, {round(time.perf_counter()-start_time,2)}s"
         )
         return conn
 
@@ -327,7 +368,7 @@ class TIMDEXDatasetMetadata:
         # if deltas, create view projecting over those parquet files
         if append_delta_count > 0:
             query = f"""
-            create view append_deltas as (
+            create or replace view metadata.append_deltas as (
                 select *
                 from read_parquet(
                     '{self.append_deltas_path}/*.parquet'
@@ -338,7 +379,7 @@ class TIMDEXDatasetMetadata:
         # if not, create a view that mirrors the structure of static_db.records
         else:
             query = """
-            create view append_deltas as (
+            create or replace view metadata.append_deltas as (
                 select *
                 from static_db.records
                 where 1 = 0
@@ -350,13 +391,13 @@ class TIMDEXDatasetMetadata:
         logger.debug("creating view of unioned records")
         conn.execute(
             """
-            create view records as
+            create or replace view metadata.records as
             (
                 select *
                 from static_db.records
                 union all
                 select *
-                from append_deltas
+                from metadata.append_deltas
             );
             """
         )
@@ -374,7 +415,7 @@ class TIMDEXDatasetMetadata:
         logger.info("creating view of current records metadata")
 
         query = f"""
-        create or replace view current_records as
+        create or replace view metadata.current_records as
         with ranked_records as (
             select
                 r.*,
@@ -382,10 +423,10 @@ class TIMDEXDatasetMetadata:
                     partition by r.timdex_record_id
                     order by r.run_timestamp desc
                 ) as rn
-            from records r
+            from metadata.records r
             where r.run_timestamp >= (
                 select max(r2.run_timestamp)
-                from records r2
+                from metadata.records r2
                 where r2.source = r.source
                 and r2.run_type = 'full'
             )
@@ -432,3 +473,41 @@ class TIMDEXDatasetMetadata:
         logger.debug(
             f"Append delta written: {output_path}, {time.perf_counter()-start_time}s"
         )
+
+    def build_meta_query(
+        self, table: str, where: str | None, **filters: Unpack["DatasetFilters"]
+    ) -> str:
+        """Build SQL query using SQLAlchemy against metadata schema tables and views."""
+        sa_table = self.get_sa_table(table)
+
+        # build WHERE clause filter expression based on any passed key/value filters
+        # and/or an explicit WHERE string
+        filter_expr = build_filter_expr_sa(sa_table, **filters)
+        if where is not None and where.strip():
+            text_where = text(where)
+            combined = (
+                and_(filter_expr, text_where) if filter_expr is not None else text_where
+            )
+        else:
+            combined = filter_expr
+
+        # create SQL statement object
+        stmt = select(
+            sa_table.c.timdex_record_id,
+            sa_table.c.run_id,
+            sa_table.c.run_record_offset,
+            sa_table.c.filename,
+        ).select_from(sa_table)
+        if combined is not None:
+            stmt = stmt.where(combined)
+        stmt = stmt.order_by(sa_table.c.filename, sa_table.c.run_record_offset)
+
+        # using DuckDB dialect, compile to SQL string
+        compiled = stmt.compile(
+            dialect=DuckDBDialect(),
+            compile_kwargs={"literal_binds": True},
+        )
+        compiled_str = str(compiled)
+        logger.debug(compiled_str)
+
+        return compiled_str

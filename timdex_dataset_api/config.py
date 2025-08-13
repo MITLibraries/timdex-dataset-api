@@ -1,5 +1,8 @@
 import logging
 import os
+import warnings
+
+from duckdb_engine import DuckDBEngineWarning
 
 
 def configure_logger(
@@ -27,6 +30,13 @@ def configure_logger(
     if warning_only_loggers:
         for warning_logger_name in warning_only_loggers.split(","):
             logging.getLogger(warning_logger_name).setLevel(logging.WARNING)
+
+    # suppress a SQLAlchemy duckdb_engine warning
+    warnings.filterwarnings(
+        "ignore",
+        category=DuckDBEngineWarning,
+        message=r".*doesn't yet support reflection on indices.*",
+    )
 
     return logger
 

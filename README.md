@@ -59,6 +59,7 @@ TDA_BATCH_READ_AHEAD=# Number of batches to optimistically read ahead when batch
 TDA_FRAGMENT_READ_AHEAD=# Number of fragments to optimistically read ahead when batch reaching from a dataset; pyarrow default is 4
 TDA_DUCKDB_MEMORY_LIMIT=# Memory limit for DuckDB connection
 TDA_DUCKDB_THREADS=# Thread limit for DuckDB connection
+TDA_DUCKDB_JOIN_BATCH_SIZE=# Batch size for metadata + data joins, 100k default and recommended
 ```
 
 ## Local S3 via MinIO
@@ -146,6 +147,8 @@ run_df = timdex_dataset.read_dataframe(
     run_id="def456"
 )
 ```
+
+See [docs/reading.md](docs/reading.md) for more information.
 
 ### Writing Data
 

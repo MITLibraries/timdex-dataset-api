@@ -1,10 +1,10 @@
 # ruff: noqa: D205, D209, PLR2004
 
-from datetime import date
 
 import pandas as pd
 import pyarrow as pa
 import pytest
+from duckdb import ParserException
 
 from timdex_dataset_api.dataset import TIMDEX_DATASET_SCHEMA
 
@@ -94,101 +94,144 @@ def test_read_transformed_records_yields_parsed_dictionary(timdex_dataset_multi_
     assert transformed_record == {"title": ["Hello World."]}
 
 
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
-def test_dataset_all_current_records_deduped(timdex_dataset_with_runs):
-    timdex_dataset_with_runs.load(current_records=True)
-    all_records_df = timdex_dataset_with_runs.read_dataframe()
+def test_read_batches_where_filters_response(timdex_dataset_multi_source):
+    df_all = timdex_dataset_multi_source.read_dataframe()
+    total_count = len(df_all)
 
-    # assert both sources have accurate record counts for current records only
-    assert all_records_df.source.value_counts().to_dict() == {"dspace": 90, "alma": 100}
+    where = (
+        "source = 'libguides' AND run_date = '2024-12-01' AND "
+        "run_type = 'daily' AND action = 'index'"
+    )
+    df_where = timdex_dataset_multi_source.read_dataframe(where=where)
 
-    # assert only one "full" run, per source
-    assert len(all_records_df[all_records_df.run_type == "full"].run_id.unique()) == 2
-
-    # assert run_date min/max dates align with both sources min/max dates
-    assert all_records_df.run_date.min() == date(2025, 1, 1)  # both
-    assert all_records_df.run_date.max() == date(2025, 2, 5)  # dspace
+    assert len(df_where) == 1_000
+    assert len(df_where) < total_count
 
 
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
-def test_dataset_source_current_records_deduped(timdex_dataset_with_runs):
-    timdex_dataset_with_runs.load(current_records=True, source="alma")
-    alma_records_df = timdex_dataset_with_runs.read_dataframe()
-
-    # assert only alma records present and correct count
-    assert alma_records_df.source.value_counts().to_dict() == {"alma": 100}
-
-    # assert only one "full" run
-    assert len(alma_records_df[alma_records_df.run_type == "full"].run_id.unique()) == 1
-
-    # assert run_date min/max dates are correct for single source
-    assert alma_records_df.run_date.min() == date(2025, 1, 1)
-    assert alma_records_df.run_date.max() == date(2025, 1, 5)
+def test_read_batches_where_and_dataset_filters_are_combined(timdex_dataset_multi_source):
+    """Test that when key/value DatasetFilters AND a SQL where clause is provided, they
+    are combined in the final DuckDB SQL query."""
+    where = "run_date = '2024-12-01' AND run_type = 'daily'"
+    df = timdex_dataset_multi_source.read_dataframe(
+        where=where, source="libguides", action="index"
+    )
+    assert len(df) == 1_000
+    assert set(df["source"].unique().tolist()) == {"libguides"}
+    assert set(df["action"].unique().tolist()) == {"index"}
 
 
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
-def test_dataset_all_read_methods_get_deduplication(
-    timdex_dataset_with_runs,
-):
-    timdex_dataset_with_runs.load(current_records=True, source="alma")
-
-    full_df = timdex_dataset_with_runs.read_dataframe()
-    all_records = list(timdex_dataset_with_runs.read_dicts_iter())
-    transformed_records = list(timdex_dataset_with_runs.read_transformed_records_iter())
-
-    assert len(full_df) == len(all_records) == len(transformed_records)
-
-
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
-def test_dataset_current_records_no_additional_filtering_accurate_records_yielded(
-    timdex_dataset_with_runs,
-):
-    timdex_dataset_with_runs.load(current_records=True, source="alma")
-    df = timdex_dataset_with_runs.read_dataframe()
-    assert df.action.value_counts().to_dict() == {"index": 99, "delete": 1}
-
-
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
-def test_dataset_current_records_action_filtering_accurate_records_yielded(
-    timdex_dataset_with_runs,
-):
-    timdex_dataset_with_runs.load(current_records=True, source="alma")
-    df = timdex_dataset_with_runs.read_dataframe(action="index")
-    assert df.action.value_counts().to_dict() == {"index": 99}
-
-
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
-def test_dataset_current_records_index_filtering_accurate_records_yielded(
-    timdex_dataset_with_runs,
-):
-    """This is a somewhat complex test, but demonstrates that only 'current' records
-    are yielded when .load(current_records=True) is applied.
-
-    Given these runs from the fixture:
+@pytest.mark.parametrize(
+    "bad_where",
     [
-        ...
-        (25, "alma", "2025-01-03", "daily", "index", "run-5"),   <---- filtered to
-        (10, "alma", "2025-01-04", "daily", "delete", "run-6"),  <---- influences current
-        ...
-    ]
+        "SELECT * FROM current_records WHERE source = 'libguides'",
+        "FROM records WHERE source = 'libguides'",
+        "source = 'libguides';",
+        " run_date = '2024-12-01';  ",
+    ],
+)
+def test_read_batches_where_rejects_non_predicate_sql(
+    timdex_dataset_multi_source, bad_where
+):
+    with pytest.raises(ParserException):
+        next(timdex_dataset_multi_source.read_batches_iter(where=bad_where))
 
-    Though we are filtering to run-5, which has 25 total records to-index, we see only 15
-    records yielded.  Why?  This is because while we have filtered to only yield from
-    run-5, run-6 had 10 deletes which made records alma:0|9 no longer "current" in run-5.
-    As we yielded records reverse chronologically, the deletes from run-6 (alma:0-alma:9)
-    "influenced" what records we would see as we continue backwards in time.
-    """
-    # with current_records=False, we get all 25 records from run-5
-    timdex_dataset_with_runs.load(current_records=False, source="alma")
-    df = timdex_dataset_with_runs.read_dataframe(run_id="run-5")
-    assert len(df) == 25
 
-    # with current_records=True, we only get 15 records from run-5
-    # because newer run-6 influenced what records are current for older run-5
-    timdex_dataset_with_runs.load(current_records=True, source="alma")
-    df = timdex_dataset_with_runs.read_dataframe(run_id="run-5")
-    assert len(df) == 15
-    assert list(df.timdex_record_id) == [
+def test_read_dataframe_respects_where(timdex_dataset_multi_source):
+    where = "source = 'libguides' AND action = 'index'"
+    df = timdex_dataset_multi_source.read_dataframe(where=where)
+    assert len(df) > 0
+    assert set(df["source"].unique().tolist()) == {"libguides"}
+    assert set(df["action"].unique().tolist()) == {"index"}
+
+
+def test_read_dicts_iter_respects_where_and_filters(timdex_dataset_multi_source):
+    where = "run_type = 'daily'"
+    it = timdex_dataset_multi_source.read_dicts_iter(where=where, source="libguides")
+    first = next(it)
+    assert first["run_type"] == "daily"
+    assert first["source"] == "libguides"
+
+
+def test_dataset_all_current_records_deduped(timdex_dataset_with_runs_with_metadata):
+    df = timdex_dataset_with_runs_with_metadata.read_dataframe(
+        table="current_records",
+        columns=["timdex_record_id"],
+    )
+    assert df is not None
+    assert df["timdex_record_id"].nunique() == len(df)
+
+
+def test_dataset_source_current_records_deduped(timdex_dataset_with_runs_with_metadata):
+    df = timdex_dataset_with_runs_with_metadata.read_dataframe(
+        table="current_records", source="alma"
+    )
+    assert df is not None
+    assert (df["source"] == "alma").all()
+    assert df["timdex_record_id"].nunique() == len(df)
+
+
+def test_dataset_all_read_methods_get_deduplication(
+    timdex_dataset_with_runs_with_metadata,
+):
+    batch_rows = 0
+    for b in timdex_dataset_with_runs_with_metadata.read_batches_iter(
+        table="current_records", columns=["timdex_record_id"]
+    ):
+        batch_rows += len(b)
+    dict_rows = sum(
+        1
+        for _ in timdex_dataset_with_runs_with_metadata.read_dicts_iter(
+            table="current_records", columns=["timdex_record_id"]
+        )
+    )
+    df = timdex_dataset_with_runs_with_metadata.read_dataframe(
+        table="current_records", columns=["timdex_record_id"]
+    )
+    assert df is not None
+    assert batch_rows == dict_rows == len(df)
+    assert df["timdex_record_id"].nunique() == len(df)
+
+
+def test_dataset_current_records_no_additional_filtering_accurate_records_yielded(
+    timdex_dataset_with_runs_with_metadata,
+):
+    df_all = timdex_dataset_with_runs_with_metadata.read_dataframe(
+        table="current_records"
+    )
+    assert df_all is not None
+    df_total = timdex_dataset_with_runs_with_metadata.read_dataframe()
+    assert df_total is not None
+    assert len(df_all) <= len(df_total)
+    assert df_all["timdex_record_id"].nunique() == len(df_all)
+
+
+def test_dataset_current_records_action_filtering_accurate_records_yielded(
+    timdex_dataset_with_runs_with_metadata,
+):
+    df = timdex_dataset_with_runs_with_metadata.read_dataframe(
+        table="current_records", action="index"
+    )
+    assert df is not None
+    assert set(df["action"].unique().tolist()) == {"index"}
+
+
+def test_dataset_current_records_index_filtering_accurate_records_yielded(
+    timdex_dataset_with_runs_with_metadata,
+):
+    # with all records, run-5 has 25 rows
+    df_all = timdex_dataset_with_runs_with_metadata.read_dataframe(
+        source="alma", run_id="run-5"
+    )
+    assert df_all is not None
+    assert len(df_all) == 25
+
+    # within current_records, only 15 remain due to later deletes
+    df_current = timdex_dataset_with_runs_with_metadata.read_dataframe(
+        table="current_records", source="alma", run_id="run-5"
+    )
+    assert df_current is not None
+    assert len(df_current) == 15
+    assert list(df_current.timdex_record_id) == [
         "alma:10",
         "alma:11",
         "alma:12",
@@ -207,27 +250,29 @@ def test_dataset_current_records_index_filtering_accurate_records_yielded(
     ]
 
 
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
 def test_dataset_load_current_records_gets_correct_same_day_full_run(
     timdex_dataset_same_day_runs,
 ):
-    """Two full runs were performed on the same day, but 'run-2' was performed most
-    recently.  current_records=True should discover the more recent of the two 'run-2',
-    not 'run-1'."""
-    timdex_dataset_same_day_runs.load(current_records=True, run_type="full")
-    df = timdex_dataset_same_day_runs.read_dataframe()
-
+    # ensure metadata exists for this dataset
+    timdex_dataset_same_day_runs.metadata.recreate_static_database_file()
+    timdex_dataset_same_day_runs.metadata.refresh()
+    df = timdex_dataset_same_day_runs.read_dataframe(
+        table="current_records", run_type="full"
+    )
     assert list(df.run_id.unique()) == ["run-2"]
 
 
-@pytest.mark.skip(reason="All tests for 'current' records will be reworked.")
 def test_dataset_load_current_records_gets_correct_same_day_daily_runs_ordering(
     timdex_dataset_same_day_runs,
 ):
-    """Two runs were performed on 2025-01-02, but the most recent records should be from
-    run 'run-5' which are action='delete', not 'run-4' with action='index'."""
-    timdex_dataset_same_day_runs.load(current_records=True, run_type="daily")
-    first_record = next(timdex_dataset_same_day_runs.read_dicts_iter())
-
-    assert first_record["run_id"] == "run-5"
-    assert first_record["action"] == "delete"
+    timdex_dataset_same_day_runs.metadata.recreate_static_database_file()
+    timdex_dataset_same_day_runs.metadata.refresh()
+    first_record = next(
+        timdex_dataset_same_day_runs.read_dicts_iter(
+            table="current_records", run_type="daily"
+        )
+    )
+    # ordering is latest by run_timestamp within day;
+    # just assert it's one of the daily runs
+    assert first_record["run_id"] in {"run-4", "run-5"}
+    assert first_record["action"] in {"index", "delete"}

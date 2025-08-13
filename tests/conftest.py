@@ -59,7 +59,7 @@ def timdex_dataset_config() -> TIMDEXDatasetConfig:
     return TIMDEXDatasetConfig()
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def timdex_dataset_config_small() -> TIMDEXDatasetConfig:
     """Small file configuration for testing partitioning behavior."""
     return TIMDEXDatasetConfig(max_rows_per_group=75, max_rows_per_file=75)
@@ -85,13 +85,14 @@ def timdex_dataset(tmp_path, timdex_dataset_config) -> TIMDEXDataset:
     return dataset
 
 
-@pytest.fixture
-def timdex_dataset_multi_source(tmp_path) -> TIMDEXDataset:
+@pytest.fixture(scope="module")
+def timdex_dataset_multi_source(tmp_path_factory) -> TIMDEXDataset:
     """TIMDEXDataset with multiple sources for testing filtering.
 
     Contains 1000 records each from: alma, dspace, aspace, libguides, gismit
     """
-    dataset = TIMDEXDataset(str(tmp_path / "multi_source_dataset/"))
+    dataset_dir = tmp_path_factory.mktemp("multi_source_dataset_mod")
+    dataset = TIMDEXDataset(str(dataset_dir))
 
     for source, run_id in [
         ("alma", "abc123"),
@@ -109,11 +110,18 @@ def timdex_dataset_multi_source(tmp_path) -> TIMDEXDataset:
             ),
             write_append_deltas=False,
         )
+
+    # ensure static metadata database exists for read methods
+    dataset.metadata.recreate_static_database_file()
+    dataset.metadata.refresh()
+
     return dataset
 
 
-@pytest.fixture
-def timdex_dataset_with_runs(tmp_path, timdex_dataset_config_small) -> TIMDEXDataset:
+@pytest.fixture(scope="module")
+def timdex_dataset_with_runs(
+    tmp_path_factory, timdex_dataset_config_small
+) -> TIMDEXDataset:
     """TIMDEXDataset with multiple full and daily ETL runs.
 
     Simulates realistic ETL pattern with:
@@ -123,7 +131,8 @@ def timdex_dataset_with_runs(tmp_path, timdex_dataset_config_small) -> TIMDEXDat
     - Small file sizes to test partitioning
     """
     dataset = TIMDEXDataset(
-        str(tmp_path / "dataset_with_runs/"), config=timdex_dataset_config_small
+        str(tmp_path_factory.mktemp("dataset_with_runs_mod")),
+        config=timdex_dataset_config_small,
     )
 
     # alma ETL runs
@@ -162,6 +171,10 @@ def timdex_dataset_with_runs(tmp_path, timdex_dataset_config_small) -> TIMDEXDat
             ),
             write_append_deltas=False,
         )
+
+    # We intentionally DO NOT create the static metadata here since some tests
+    # expect it to be missing initially. Use a separate fixture when metadata is required.
+
     return dataset
 
 
@@ -205,12 +218,23 @@ def timdex_dataset_same_day_runs(tmp_path) -> TIMDEXDataset:
 # ================================================================================
 
 
-@pytest.fixture
+@pytest.fixture(scope="module")
 def timdex_metadata(timdex_dataset_with_runs) -> TIMDEXDatasetMetadata:
     """TIMDEXDatasetMetadata with static database file created."""
     metadata = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
     metadata.recreate_static_database_file()
+    metadata.refresh()
     return metadata
+
+
+@pytest.fixture(scope="module")
+def timdex_dataset_with_runs_with_metadata(
+    timdex_dataset_with_runs,
+) -> TIMDEXDataset:
+    """TIMDEXDataset with runs and static metadata created for read tests."""
+    timdex_dataset_with_runs.metadata.recreate_static_database_file()
+    timdex_dataset_with_runs.metadata.refresh()
+    return timdex_dataset_with_runs
 
 
 @pytest.fixture
