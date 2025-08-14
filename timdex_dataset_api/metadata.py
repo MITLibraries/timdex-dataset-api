@@ -194,7 +194,6 @@ class TIMDEXDatasetMetadata:
                 create or replace secret aws_s3_secret (
                     type s3,
                     provider credential_chain,
-                    chain 'sso;env;config',
                     refresh true
                     {scope_str}
                 );
