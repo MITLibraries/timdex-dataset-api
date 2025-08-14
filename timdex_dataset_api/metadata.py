@@ -396,7 +396,8 @@ class TIMDEXDatasetMetadata:
             create or replace view metadata.append_deltas as (
                 select *
                 from read_parquet(
-                    '{self.append_deltas_path}/*.parquet'
+                    '{self.append_deltas_path}/*.parquet',
+                    filename = 'append_delta_filename'
                 )
             );
             """
@@ -414,14 +415,17 @@ class TIMDEXDatasetMetadata:
 
     def _create_records_union_view(self, conn: DuckDBPyConnection) -> None:
         logger.debug("creating view of unioned records")
+
         conn.execute(
-            """
+            f"""
             create or replace view metadata.records as
             (
-                select *
+                select
+                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
                 from static_db.records
                 union all
-                select *
+                select
+                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
                 from metadata.append_deltas
             );
             """
