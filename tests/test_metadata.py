@@ -1,3 +1,5 @@
+# ruff: noqa: S105, S108
+
 import glob
 import os
 from pathlib import Path
@@ -262,3 +264,72 @@ def test_tdm_current_records_most_recent_version(timdex_metadata_with_deltas):
             == most_recent.iloc[0]["run_timestamp"]
         )
         assert current_version.iloc[0]["run_id"] == most_recent.iloc[0]["run_id"]
+
+
+def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_and_valid(
+    monkeypatch, tmp_path_factory, timdex_dataset_with_runs
+):
+    preset_home = tmp_path_factory.mktemp("my-account")
+    monkeypatch.setenv("HOME", str(preset_home))
+
+    tdm = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+    df = (
+        tdm.conn.query(
+            """
+        select
+            current_setting('secret_directory') as secret_directory,
+            current_setting('extension_directory') as extension_directory
+        ;
+        """
+        )
+        .to_df()
+        .iloc[0]
+    )
+    assert "my-account" in df.secret_directory
+    assert df.extension_directory == ""  # expected and okay when HOME set
+
+
+def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_unset(
+    monkeypatch, timdex_dataset_with_runs
+):
+    monkeypatch.delenv("HOME", raising=False)
+
+    tdm = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+
+    df = (
+        tdm.conn.query(
+            """
+        select
+            current_setting('secret_directory') as secret_directory,
+            current_setting('extension_directory') as extension_directory
+        ;
+        """
+        )
+        .to_df()
+        .iloc[0]
+    )
+    assert df.secret_directory == "/tmp/.duckdb/secrets"
+    assert df.extension_directory == "/tmp/.duckdb/extensions"
+
+
+def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_but_empty(
+    monkeypatch, timdex_dataset_with_runs
+):
+    monkeypatch.setenv("HOME", "")  # simulate AWS Lambda environment
+
+    tdm = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+
+    df = (
+        tdm.conn.query(
+            """
+        select
+            current_setting('secret_directory') as secret_directory,
+            current_setting('extension_directory') as extension_directory
+        ;
+        """
+        )
+        .to_df()
+        .iloc[0]
+    )
+    assert df.secret_directory == "/tmp/.duckdb/secrets"
+    assert df.extension_directory == "/tmp/.duckdb/extensions"

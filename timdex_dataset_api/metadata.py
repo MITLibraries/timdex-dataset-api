@@ -148,8 +148,34 @@ class TIMDEXDatasetMetadata:
 
         These configurations include things like memory settings, AWS authentication, etc.
         """
+        self._install_duckdb_extensions(conn)
         self._configure_duckdb_s3_secret(conn)
         self._configure_duckdb_memory_profile(conn)
+
+    def _install_duckdb_extensions(self, conn: DuckDBPyConnection) -> None:
+        """Ensure DuckDB capable of installing extensions and install any required."""
+        # ensure secrets and extensions paths are accessible
+        home_env = os.getenv("HOME")
+        use_fallback_home = not home_env or not Path(home_env).is_dir()
+
+        if use_fallback_home:
+            duckdb_home = Path("/tmp/.duckdb")  # noqa: S108
+            secrets_dir = duckdb_home / "secrets"
+            extensions_dir = duckdb_home / "extensions"
+
+            secrets_dir.mkdir(parents=True, exist_ok=True)
+            extensions_dir.mkdir(parents=True, exist_ok=True)
+
+            conn.execute(f"set secret_directory='{secrets_dir.as_posix()}';")
+            conn.execute(f"set extension_directory='{extensions_dir.as_posix()}';")
+
+        # install HTTPFS extension
+        conn.execute(
+            """
+            install httpfs;
+            load httpfs;
+            """
+        )
 
     def _configure_duckdb_s3_secret(
         self,
@@ -161,14 +187,6 @@ class TIMDEXDatasetMetadata:
         If a scope is provided, e.g. an S3 URI prefix like 's3://timdex', set a scope
         parameter in the config.  Else, leave it blank.
         """
-        # install httpfs extension
-        conn.execute(
-            """
-            install httpfs;
-            load httpfs;
-            """
-        )
-
         # establish scope string
         scope_str = f", scope '{scope}'" if scope else ""
 

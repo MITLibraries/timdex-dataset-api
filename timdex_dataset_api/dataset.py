@@ -226,8 +226,8 @@ class TIMDEXDataset:
     def setup_duckdb_context(self) -> DuckDBPyConnection:
         """Create a DuckDB connection that metadata and data query and retrieval.
 
-        This relies on TIMDEXDatasetMetadata.setup_duckdb_context() to produce a DuckDB
-        connection that has all metadata already created.
+        This method extends TIMDEXDatasetMetadata's pre-existing DuckDB connection, adding
+        a 'data' schema and any other configurations needed.
         """
         start_time = time.perf_counter()
 
