@@ -25,8 +25,10 @@ dependencies = [
     "attrs",
     "boto3",
     "duckdb",
+    "duckdb_engine",
     "pandas",
     "pyarrow",
+    "sqlalchemy"
 ]
 
 [project.optional-dependencies]
