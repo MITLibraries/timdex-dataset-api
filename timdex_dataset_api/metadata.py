@@ -161,6 +161,14 @@ class TIMDEXDatasetMetadata:
         If a scope is provided, e.g. an S3 URI prefix like 's3://timdex', set a scope
         parameter in the config.  Else, leave it blank.
         """
+        # install httpfs extension
+        conn.execute(
+            """
+            install httpfs;
+            load httpfs;
+            """
+        )
+
         # establish scope string
         scope_str = f", scope '{scope}'" if scope else ""
 
@@ -186,7 +194,6 @@ class TIMDEXDatasetMetadata:
                 create or replace secret aws_s3_secret (
                     type s3,
                     provider credential_chain,
-                    chain 'sso;env;config',
                     refresh true
                     {scope_str}
                 );
