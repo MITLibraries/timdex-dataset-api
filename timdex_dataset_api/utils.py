@@ -11,7 +11,6 @@ from urllib.parse import urlparse
 import boto3
 from duckdb.duckdb import DuckDBPyConnection  # type: ignore[import-untyped]
 from duckdb_engine import ConnectionWrapper
-from mypy_boto3_s3.service_resource import S3ServiceResource
 from sqlalchemy import (
     MetaData,
     Table,
@@ -20,6 +19,8 @@ from sqlalchemy import (
 )
 
 if TYPE_CHECKING:
+    from mypy_boto3_s3.service_resource import S3ServiceResource
+
     from timdex_dataset_api.dataset import DatasetFilters
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ class S3Client:
     ) -> None:
         self.resource = self._create_resource()
 
-    def _create_resource(self) -> S3ServiceResource:
+    def _create_resource(self) -> "S3ServiceResource":
         """Instantiate a boto3 S3 resource.
 
         If env var MINIO_S3_ENDPOINT_URL is set, assume using local set of MinIO env vars.
