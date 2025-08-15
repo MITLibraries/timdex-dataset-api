@@ -49,7 +49,17 @@ WARNING_ONLY_LOGGERS=# Comma-seperated list of logger names to set as WARNING on
 MINIO_S3_ENDPOINT_URL=# If set, informs the library to use this Minio S3 instance.  Requires the http(s):// protocol. 
 MINIO_USERNAME=# Username / AWS Key for Minio; required when MINIO_S3_ENDPOINT_URL is set
 MINIO_PASSWORD=# Pasword / AWS Secret for Minio; required when MINIO_S3_ENDPOINT_URL is set
-MINIO_DATA=# Path to persist MinIO data if started via Makefile command 
+MINIO_DATA=# Path to persist MinIO data if started via Makefile command
+
+TDA_READ_BATCH_SIZE=# Row size of batches read, affecting memory consumption
+TDA_WRITE_BATCH_SIZE=# Row size of batches written, directly affecting row group size in final parquet files
+TDA_MAX_ROWS_PER_GROUP=# Max number of rows per row group in a parquet file
+TDA_MAX_ROWS_PER_FILE=# Max number of rows in a single parquet file
+TDA_BATCH_READ_AHEAD=# Number of batches to optimistically read ahead when batch reading from a dataset; pyarrow default is 16
+TDA_FRAGMENT_READ_AHEAD=# Number of fragments to optimistically read ahead when batch reaching from a dataset; pyarrow default is 4
+TDA_DUCKDB_MEMORY_LIMIT=# Memory limit for DuckDB connection
+TDA_DUCKDB_THREADS=# Thread limit for DuckDB connection
+TDA_DUCKDB_JOIN_BATCH_SIZE=# Batch size for metadata + data joins, 100k default and recommended
 ```
 
 ## Local S3 via MinIO
@@ -101,12 +111,6 @@ timdex_dataset = TIMDEXDataset("s3://my-bucket/path/to/dataset")
 
 # or, local dataset (e.g. testing or development)
 timdex_dataset = TIMDEXDataset("/path/to/dataset")
-
-# load the dataset, which discovers all parquet files
-timdex_dataset.load()
-
-# or, load the dataset but ensure that only current records are ever yielded
-timdex_dataset.load(current_records=True)
 ```
 
 All read methods for `TIMDEXDataset` allow for the same group of filters which are defined in `timdex_dataset_api.dataset.DatasetFilters`.  Examples are shown below.
@@ -143,6 +147,8 @@ run_df = timdex_dataset.read_dataframe(
     run_id="def456"
 )
 ```
+
+See [docs/reading.md](docs/reading.md) for more information.
 
 ### Writing Data
 

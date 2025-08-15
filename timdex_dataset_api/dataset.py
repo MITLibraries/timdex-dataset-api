@@ -2,28 +2,29 @@
 
 import itertools
 import json
-import operator
 import os
 import time
 import uuid
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime
-from functools import reduce
-from typing import TYPE_CHECKING, TypedDict, Unpack
+from datetime import date, datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Literal, TypedDict, Unpack
+from urllib.parse import urlparse
 
 import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
+from duckdb import DuckDBPyConnection
 from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
-from timdex_dataset_api.exceptions import DatasetNotLoadedError
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 if TYPE_CHECKING:
     from timdex_dataset_api.record import DatasetRecord  # pragma: nocover
+
 
 logger = configure_logger(__name__)
 
@@ -53,17 +54,14 @@ TIMDEX_DATASET_PARTITION_COLUMNS = [
 
 
 class DatasetFilters(TypedDict, total=False):
-    timdex_record_id: str | None
-    source: str | None
-    run_date: str | date | None
-    run_type: str | None
-    action: str | None
-    run_id: str | None
-    run_record_offset: int | None
-    year: str | None
-    month: str | None
-    day: str | None
-    run_timestamp: str | datetime | None
+    timdex_record_id: str | list[str] | None
+    source: str | list[str] | None
+    run_date: str | date | list[str | date] | None
+    run_type: str | list[str] | None
+    action: str | list[str] | None
+    run_id: str | list[str] | None
+    run_record_offset: int | list[int] | None
+    run_timestamp: str | datetime | list[str | datetime] | None
 
 
 @dataclass
@@ -99,189 +97,105 @@ class TIMDEXDatasetConfig:
     fragment_read_ahead: int = field(
         default_factory=lambda: int(os.getenv("TDA_FRAGMENT_READ_AHEAD", "0"))
     )
+    duckdb_join_batch_size: int = field(
+        default_factory=lambda: int(os.getenv("TDA_DUCKDB_JOIN_BATCH_SIZE", "100_000"))
+    )
 
 
 class TIMDEXDataset:
 
     def __init__(
         self,
-        location: str | list[str],
+        location: str,
         config: TIMDEXDatasetConfig | None = None,
     ):
         """Initialize TIMDEXDataset object.
 
         Args:
-            location (str | list[str]): Local filesystem path or an S3 URI to
-                a parquet dataset. For partitioned datasets, set to the base directory.
+            location (str ): Local filesystem path or an S3 URI to a parquet dataset.
         """
         self.config = config or TIMDEXDatasetConfig()
         self.location = location
 
+        self.create_data_structure()
+
         # pyarrow dataset
-        self.filesystem, self.paths = self.parse_location(self.location)
-        self.dataset: ds.Dataset = None  # type: ignore[assignment]
         self.schema = TIMDEX_DATASET_SCHEMA
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
+        self.dataset = self.load_pyarrow_dataset()
 
-        # writing
-        self._written_files: list[ds.WrittenFile] = None  # type: ignore[assignment]
+        # dataset metadata
+        self.metadata = TIMDEXDatasetMetadata(location)
 
-        # reading
-        self._current_records: bool = False
-        self.metadata: TIMDEXDatasetMetadata = None  # type: ignore[assignment]
+        # DuckDB context
+        self.conn = self.setup_duckdb_context()
 
     @property
-    def row_count(self) -> int:
-        """Get row count from loaded dataset."""
-        if not self.dataset:
-            raise DatasetNotLoadedError
-        return self.dataset.count_rows()
+    def location_scheme(self) -> Literal["file", "s3"]:
+        scheme = urlparse(self.location).scheme
+        if scheme == "":
+            return "file"
+        if scheme == "s3":
+            return "s3"
+        raise ValueError(f"Location with scheme type '{scheme}' not supported.")
 
-    def load(
-        self,
-        *,
-        current_records: bool = False,
-        **filters: Unpack[DatasetFilters],
-    ) -> None:
-        """Lazy load a pyarrow.dataset.Dataset and set to self.dataset.
+    @property
+    def data_records_root(self) -> str:
+        return f"{self.location.removesuffix('/')}/data/records"  # type: ignore[union-attr]
 
-        Loading is comprised of two main steps:
+    def create_data_structure(self) -> None:
+        """Ensure ETL records data structure exists in TIMDEX dataset."""
+        if self.location_scheme == "file":
+            Path(self.data_records_root).mkdir(
+                parents=True,
+                exist_ok=True,
+            )
 
-        - load: Lazily load full dataset. PyArrow will "discover" full dataset.
-            Note: This step may take a couple of seconds but leans on PyArrow's
-            parquet reading processes.
-        - filter: Lazily filter rows in the PyArrow dataset by conditions on
-            TIMDEX_DATASET_FILTER_COLUMNS.
+    def load_pyarrow_dataset(self, parquet_files: list[str] | None = None) -> ds.Dataset:
+        """Lazy load a pyarrow.dataset.Dataset.
 
         The dataset is loaded via the expected schema as defined by module constant
         TIMDEX_DATASET_SCHEMA.  If the target dataset differs in any way, errors may be
         raised when reading or writing data.
 
         Args:
-            - filters: kwargs typed via DatasetFilters TypedDict
-                - Filters passed directly in method call, e.g. source="alma",
-                 run_date="2024-12-20", etc., but are typed according to DatasetFilters.
-            - current_records: bool
-                - if True, all records yielded from this instance will be the current
-                version of the record in the dataset.
+            parquet_files: explicit list of parquet files to construct pyarrow dataset
         """
         start_time = time.perf_counter()
 
-        # reset paths from original location before load
-        _, self.paths = self.parse_location(self.location)
+        # get pyarrow filesystem and dataset path basesd on self.location
+        filesystem, path = self.parse_location(self.data_records_root)
 
-        # read dataset metadata if only current records are requested
-        self._current_records = current_records
-        if current_records:
-            self.metadata = TIMDEXDatasetMetadata(timdex_dataset=self)
-            self.paths = self.metadata.get_current_parquet_files(**filters)
+        # set source for pyarrow dataset
+        source: str | list[str] = parquet_files or path
 
-        # perform initial load of full dataset
-        self.dataset = self._load_pyarrow_dataset()
-
-        # filter dataset
-        self.dataset = self._get_filtered_dataset(**filters)
-
-        logger.info(
-            f"Dataset successfully loaded: '{self.location}', "
-            f"{round(time.perf_counter()-start_time, 2)}s"
-        )
-
-    def _load_pyarrow_dataset(self) -> ds.Dataset:
-        """Load the pyarrow dataset per local filesystem and paths attributes."""
-        return ds.dataset(
-            self.paths,
+        dataset = ds.dataset(
+            source,
             schema=self.schema,
             format="parquet",
             partitioning="hive",
-            filesystem=self.filesystem,
+            filesystem=filesystem,
         )
 
-    def _get_filtered_dataset(
+        logger.info(
+            f"Dataset successfully loaded: '{self.data_records_root}', "
+            f"{round(time.perf_counter()-start_time, 2)}s"
+        )
+
+        return dataset
+
+    def parse_location(
         self,
-        **filters: Unpack[DatasetFilters],
-    ) -> ds.Dataset:
-        """Lazy filter self.dataset and return a new pyarrow Dataset object.
-
-        This method will construct a single pyarrow.compute.Expression
-        that is combined from individual equality comparison predicates
-        using the provided filters.
-
-        Args:
-            - filters: kwargs typed via DatasetFilters TypedDict
-                - Filters passed directly in method call, e.g. source="alma",
-                 run_date="2024-12-20", etc., but are typed according to DatasetFilters.
-
-        Raises:
-            DatasetNotLoadedError: Raised if `self.dataset` is None.
-                TIMDEXDataset.load must be called before any filter method calls.
-            ValueError: Raised if provided 'run_date' is an invalid type or
-                cannot be parsed.
-
-        Returns:
-            ds.Dataset: Original pyarrow.dataset.Dataset (if no filters applied)
-                or new pyarrow.dataset.Dataset with applied filters.
-        """
-        if not self.dataset:
-            raise DatasetNotLoadedError
-
-        # if run_date provided, derive year, month, and day partition filters and set
-        if filters.get("run_date"):
-            filters.update(self._parse_date_filters(filters["run_date"]))
-
-        # create filter expressions for element-wise equality comparisons
-        expressions = []
-        for field, value in filters.items():  # noqa: F402
-            if isinstance(value, list):
-                expressions.append(ds.field(field).isin(value))
-            else:
-                expressions.append(ds.field(field) == value)
-
-        # if filter expressions not found, return original dataset
-        if not expressions:
-            return self.dataset
-
-        # combine filter expressions as a single predicate
-        combined_expressions = reduce(operator.and_, expressions)
-        logger.debug(
-            "Filtering dataset based on the following column-value pairs: "
-            f"{combined_expressions}"
-        )
-
-        return self.dataset.filter(combined_expressions)
-
-    def _parse_date_filters(self, run_date: str | date | None) -> DatasetFilters:
-        """Parse date filters from 'run_date'.
-
-        Args:
-            run_date (str | date | None): If str, the value must match the
-                date format "%Y-%m-%d"; if date, ymd values are extracted
-                as str.
-
-        Raises:
-            TypeError: Raised when 'run_date' is an invalid type.
-            ValueError: Raised when either a datetime.date object cannot be parsed
-                from a provided 'run_date' str.
-
-        Returns:
-            DatasetFilters[dict]: values for run_date, year, month, and day
-        """
-        if isinstance(run_date, str):
-            run_date_obj = datetime.strptime(run_date, "%Y-%m-%d").astimezone(UTC).date()
-        elif isinstance(run_date, date):
-            run_date_obj = run_date
+        location: str,
+    ) -> tuple[fs.FileSystem, str]:
+        """Parse and return a pyarrow filesystem and normalized parquet path(s)."""
+        if self.location_scheme == "s3":
+            filesystem = TIMDEXDataset.get_s3_filesystem()
+            source = location.removeprefix("s3://")
         else:
-            raise TypeError(
-                "Provided 'run_date' value must be a string matching format "
-                "'%Y-%m-%d' or a datetime.date."
-            )
-
-        return {
-            "run_date": run_date_obj,
-            "year": run_date_obj.strftime("%Y"),
-            "month": run_date_obj.strftime("%m"),
-            "day": run_date_obj.strftime("%d"),
-        }
+            filesystem = fs.LocalFileSystem()
+            source = location
+        return filesystem, source
 
     @staticmethod
     def get_s3_filesystem() -> fs.FileSystem:
@@ -296,7 +210,7 @@ class TIMDEXDataset:
             raise RuntimeError("Could not locate AWS credentials")
 
         if os.getenv("MINIO_S3_ENDPOINT_URL"):
-            return fs.S3FileSystem(
+            return fs.S3FileSystem(  # pragma: nocover
                 access_key=os.environ["MINIO_USERNAME"],
                 secret_key=os.environ["MINIO_PASSWORD"],
                 endpoint_override=os.environ["MINIO_S3_ENDPOINT_URL"],
@@ -309,56 +223,30 @@ class TIMDEXDataset:
             session_token=credentials.token,
         )
 
-    @classmethod
-    def parse_location(
-        cls,
-        location: str | list[str],
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Parse and return the filesystem and normalized source location(s).
+    def setup_duckdb_context(self) -> DuckDBPyConnection:
+        """Create a DuckDB connection that metadata and data query and retrieval.
 
-        Handles both single location strings and lists of Parquet file paths.
+        This method extends TIMDEXDatasetMetadata's pre-existing DuckDB connection, adding
+        a 'data' schema and any other configurations needed.
         """
-        match location:
-            case str():
-                return cls._parse_single_location(location)
-            case list():
-                return cls._parse_multiple_locations(location)
-            case _:
-                raise TypeError("Location type must be str or list[str].")
+        start_time = time.perf_counter()
 
-    @classmethod
-    def _parse_single_location(
-        cls, location: str
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Get filesystem and normalized location for single location."""
-        if location.startswith("s3://"):
-            filesystem = TIMDEXDataset.get_s3_filesystem()
-            source = location.removeprefix("s3://")
-        else:
-            filesystem = fs.LocalFileSystem()
-            source = location
-        return filesystem, source
+        conn = self.metadata.conn
 
-    @classmethod
-    def _parse_multiple_locations(
-        cls, location: list[str]
-    ) -> tuple[fs.FileSystem, str | list[str]]:
-        """Get filesystem and normalized location for multiple locations."""
-        if all(loc.startswith("s3://") for loc in location):
-            filesystem = TIMDEXDataset.get_s3_filesystem()
-            source = [loc.removeprefix("s3://") for loc in location]
-        elif all(not loc.startswith("s3://") for loc in location):
-            filesystem = fs.LocalFileSystem()
-            source = location
-        else:
-            raise ValueError("Mixed S3 and local paths are not supported.")
-        return filesystem, source
+        # create data schema
+        conn.execute("""create schema data;""")
+
+        logger.debug(
+            f"DuckDB data context created, {round(time.perf_counter()-start_time,2)}s"
+        )
+        return conn
 
     def write(
         self,
         records_iter: Iterator["DatasetRecord"],
         *,
         use_threads: bool = True,
+        write_append_deltas: bool = True,
     ) -> list[ds.WrittenFile]:
         """Write records to the TIMDEX parquet dataset.
 
@@ -381,25 +269,23 @@ class TIMDEXDataset:
         Args:
             - records_iter: Iterator of DatasetRecord instances
             - use_threads: boolean if threads should be used for writing
+            - write_append_deltas: boolean if append deltas should be written for records
+                written during write
         """
         start_time = time.perf_counter()
-        self._written_files = []
+        written_files: list[ds.WrittenFile] = []
 
-        dataset_filesystem, dataset_path = self.parse_location(self.location)
-        if isinstance(dataset_path, list):
-            raise TypeError(
-                "Dataset location must be the root of a single dataset for writing"
-            )
+        filesystem, path = self.parse_location(self.data_records_root)
 
+        # write ETL parquet records
         record_batches_iter = self.create_record_batches(records_iter)
-
         ds.write_dataset(
             record_batches_iter,
-            base_dir=dataset_path,
+            base_dir=path,
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
             existing_data_behavior="overwrite_or_ignore",
-            filesystem=dataset_filesystem,
-            file_visitor=lambda written_file: self._written_files.append(written_file),  # type: ignore[arg-type]
+            filesystem=filesystem,
+            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type]
             format="parquet",
             max_open_files=500,
             max_rows_per_file=self.config.max_rows_per_file,
@@ -410,8 +296,18 @@ class TIMDEXDataset:
             use_threads=use_threads,
         )
 
-        self.log_write_statistics(start_time)
-        return self._written_files  # type: ignore[return-value]
+        # refresh dataset files
+        self.dataset = self.load_pyarrow_dataset()
+
+        # write metadata append deltas
+        if write_append_deltas:
+            for written_file in written_files:
+                self.metadata.write_append_delta_duckdb(written_file.path)  # type: ignore[attr-defined]
+            self.metadata.refresh()
+
+        self.log_write_statistics(start_time, written_files)
+
+        return written_files
 
     def create_record_batches(
         self, records_iter: Iterator["DatasetRecord"]
@@ -434,19 +330,18 @@ class TIMDEXDataset:
             logger.debug(f"Yielding batch {i + 1} for dataset writing.")
             yield batch
 
-    def log_write_statistics(self, start_time: float) -> None:
+    def log_write_statistics(
+        self,
+        start_time: float,
+        written_files: list[ds.WrittenFile],
+    ) -> None:
         """Parse written files from write and log statistics."""
         total_time = round(time.perf_counter() - start_time, 2)
-        total_files = len(self._written_files)
+        total_files = len(written_files)
         total_rows = sum(
-            [
-                wf.metadata.num_rows  # type: ignore[attr-defined]
-                for wf in self._written_files
-            ]
+            [wf.metadata.num_rows for wf in written_files]  # type: ignore[attr-defined]
         )
-        total_size = sum(
-            [wf.size for wf in self._written_files]  # type: ignore[attr-defined]
-        )
+        total_size = sum([wf.size for wf in written_files])  # type: ignore[attr-defined]
         logger.info(
             f"Dataset write complete - elapsed: "
             f"{total_time}s, "
@@ -457,129 +352,134 @@ class TIMDEXDataset:
 
     def read_batches_iter(
         self,
+        table: str = "records",
         columns: list[str] | None = None,
+        where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[pa.RecordBatch]:
-        """Yield pyarrow.RecordBatches from the dataset.
+        """Yield ETL records as pyarrow.RecordBatches.
 
-        While batch_size will limit the max rows per batch, filtering may result in some
-        batches having less than this limit.
+        This method performs a two step process:
 
-        If the flag self._current_records is set, this method leans on
-        self._yield_current_record_deduped_batches() to apply deduplication of records to
-        ensure only current versions of the record are ever yielded.
+            1. Perform a "metadata" query that narrows down records and physical parquet
+            files to read from.
+            2. Perform a "data" query that retrieves actual rows, joining the metadata
+            information to increase efficiency.
+
+        More detail can be found here: docs/reading.md
 
         Args:
-            - columns: list[str], list of columns to return from the dataset
-            - filters: pairs of column:value to filter the dataset
+            - table: an available DuckDB view or table
+            - columns: list of columns to return
+            - where: raw SQL WHERE clause that can be used alone, or in combination with
+            key/value DatasetFilters
+            - filters: simple filtering based on key/value pairs from DatasetFilters
         """
-        if not self.dataset:
-            raise DatasetNotLoadedError(
-                "Dataset is not loaded. Please call the `load` method first."
-            )
-        dataset = self._get_filtered_dataset(**filters)
-
-        # if current records, add required columns for deduplication
-        if self._current_records:
-            if not columns:
-                columns = TIMDEX_DATASET_SCHEMA.names
-            columns.extend(["timdex_record_id", "run_id"])
-            columns = list(set(columns))
-
-        batches = dataset.to_batches(
-            columns=columns,
-            batch_size=self.config.read_batch_size,
-            batch_readahead=self.config.batch_read_ahead,
-            fragment_readahead=self.config.fragment_read_ahead,
+        # build and execute metadata query
+        metadata_time = time.perf_counter()
+        meta_query = self.metadata.build_meta_query(table, where, **filters)
+        meta_df = self.metadata.conn.query(meta_query).to_df()
+        logger.debug(
+            f"Metadata query identified {len(meta_df)} rows, "
+            f"across {len(meta_df.filename.unique())} parquet files, "
+            f"elapsed: {round(time.perf_counter()-metadata_time,2)}s"
         )
 
-        if self._current_records:
-            yield from self._yield_current_record_batches(batches, **filters)
-        else:
-            for batch in batches:
-                if len(batch) > 0:
-                    yield batch
+        # execute data queries in batches and yield results
+        total_yield_count = 0
+        for i, meta_chunk_df in enumerate(self._iter_meta_chunks(meta_df)):
+            batch_time = time.perf_counter()
+            batch_yield_count = len(meta_chunk_df)
+            total_yield_count += batch_yield_count
 
-    def _yield_current_record_batches(
-        self,
-        batches: Iterator[pa.RecordBatch],
-        **filters: Unpack[DatasetFilters],
-    ) -> Iterator[pa.RecordBatch]:
-        """Method to yield only the most recent version of each record.
-
-        When multiple versions of a record (same timdex_record_id) exist in the dataset,
-        this method ensures only the most recent version is returned.  If filtering is
-        applied that removes this most recent version of a record, that timdex_record_id
-        will not be yielded at all.
-
-        This method uses TIMDEXDatasetMetadata to provide a mapping of timdex_record_id to
-        run_id for the current ETL run for that record.  While yielding records, only when
-        the timdex_record_id + run_id match the mapping is a record yielded.
-
-        Args:
-            - batches: batches of records to actually yield from
-            - filters: pairs of column:value to filter the dataset metadata required
-        """
-        # get map of timdex_record_id to run_id for current version of that record
-        record_to_run_map = self.metadata.get_current_record_to_run_map(**filters)
-
-        # loop through batches, yielding only current records
-        for batch in batches:
-
-            if batch.num_rows == 0:
+            if batch_yield_count == 0:
                 continue
 
-            to_yield_indices = []
+            self.conn.register("meta_chunk", meta_chunk_df)
+            data_query = self._build_data_query_for_chunk(
+                columns,
+                meta_chunk_df,
+                registered_metadata_chunk="meta_chunk",
+            )
+            yield from self._stream_data_query_batches(data_query)
+            self.conn.unregister("meta_chunk")
 
-            record_ids = batch.column("timdex_record_id").to_pylist()
-            run_ids = batch.column("run_id").to_pylist()
+            batch_rps = int(batch_yield_count / (time.perf_counter() - batch_time))
+            logger.debug(
+                f"read_batches_iter batch {i+1}, yielded: {batch_yield_count} "
+                f"@ {batch_rps} records/second, total yielded: {total_yield_count}"
+            )
 
-            for i, (record_id, run_id) in enumerate(
-                zip(
-                    record_ids,
-                    run_ids,
-                    strict=True,
-                )
-            ):
-                if record_to_run_map.get(record_id) == run_id:
-                    to_yield_indices.append(i)
+    def _iter_meta_chunks(self, meta_df: pd.DataFrame) -> Iterator[pd.DataFrame]:
+        """Utility method to yield chunks of metadata query results."""
+        for start in range(0, len(meta_df), self.config.duckdb_join_batch_size):
+            yield meta_df.iloc[start : start + self.config.duckdb_join_batch_size]
 
-            if to_yield_indices:
-                yield batch.take(pa.array(to_yield_indices))  # type: ignore[arg-type]
+    def _build_parquet_file_list(self, meta_chunk_df: pd.DataFrame) -> str:
+        """Build SQL list of parquet filepaths."""
+        filenames = meta_chunk_df["filename"].unique().tolist()
+        if self.location_scheme == "s3":
+            filenames = [f"s3://{f.removeprefix('s3://')}" for f in filenames]
+        return "[" + ",".join((f"'{f}'") for f in filenames) + "]"
+
+    def _build_data_query_for_chunk(
+        self,
+        columns: list[str] | None,
+        meta_chunk_df: pd.DataFrame,
+        registered_metadata_chunk: str = "meta_chunk",
+    ) -> str:
+        """Build SQL query used for data retrieval, joining on metadata data."""
+        parquet_list_sql = self._build_parquet_file_list(meta_chunk_df)
+        rro_list_sql = ",".join(
+            str(rro) for rro in meta_chunk_df["run_record_offset"].unique()
+        )
+        select_cols = ",".join(
+            [f"ds.{col}" for col in (columns or TIMDEX_DATASET_SCHEMA.names)]
+        )
+        return f"""
+            select
+                {select_cols}
+            from read_parquet(
+                {parquet_list_sql},
+                hive_partitioning=true,
+                filename=true
+            ) as ds
+            inner join {registered_metadata_chunk} mc using (
+                timdex_record_id, run_id, run_record_offset
+            )
+            where ds.run_record_offset in ({rro_list_sql});
+            """
+
+    def _stream_data_query_batches(self, data_query: str) -> Iterator[pa.RecordBatch]:
+        """Yield pyarrow RecordBatches from a SQL query."""
+        self.conn.execute("set enable_progress_bar = false;")
+        cursor = self.conn.execute(data_query)
+        yield from cursor.fetch_record_batch(rows_per_batch=self.config.read_batch_size)
+        self.conn.execute("set enable_progress_bar = true;")
 
     def read_dataframes_iter(
         self,
+        table: str = "records",
         columns: list[str] | None = None,
+        where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[pd.DataFrame]:
-        """Yield record batches as Pandas DataFrames from the dataset.
-
-        Args: see self.read_batches_iter()
-        """
         for record_batch in self.read_batches_iter(
-            columns=columns,
-            **filters,
+            table=table, columns=columns, where=where, **filters
         ):
             yield record_batch.to_pandas()
 
     def read_dataframe(
         self,
+        table: str = "records",
         columns: list[str] | None = None,
+        where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> pd.DataFrame | None:
-        """Yield record batches as Pandas DataFrames and concatenate to single dataframe.
-
-        WARNING: this will pull all records from currently filtered dataset into memory.
-
-        If no batches are found based on filtered dataset, None is returned.
-
-        Args: see self.read_batches_iter()
-        """
         df_batches = [
             record_batch.to_pandas()
             for record_batch in self.read_batches_iter(
-                columns=columns,
-                **filters,
+                table=table, columns=columns, where=where, **filters
             )
         ]
         if not df_batches:
@@ -588,34 +488,24 @@ class TIMDEXDataset:
 
     def read_dicts_iter(
         self,
+        table: str = "records",
         columns: list[str] | None = None,
+        where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[dict]:
-        """Yield individual record rows as dictionaries from the dataset.
-
-        Args: see self.read_batches_iter()
-        """
         for record_batch in self.read_batches_iter(
-            columns=columns,
-            **filters,
+            table=table, columns=columns, where=where, **filters
         ):
             yield from record_batch.to_pylist()
 
     def read_transformed_records_iter(
         self,
+        table: str = "records",
+        where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[dict]:
-        """Yield individual transformed records as dictionaries from the dataset.
-
-        If 'transformed_record' is None (common scenarios are action="skip"|"error"), the
-        yield statement will not be executed for the row.  Note that for action="delete" a
-        transformed record still may be yielded if present.
-
-        Args: see self.read_batches_iter()
-        """
         for record_dict in self.read_dicts_iter(
-            columns=["timdex_record_id", "transformed_record"],
-            **filters,
+            table=table, columns=["transformed_record"], where=where, **filters
         ):
             if transformed_record := record_dict["transformed_record"]:
                 yield json.loads(transformed_record)

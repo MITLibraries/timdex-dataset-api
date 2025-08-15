@@ -9,10 +9,12 @@ boto3 = "*"
 duckdb = "*"
 pandas = "*"
 pyarrow = "*"
+sqlalchemy = "*"
+duckdb-engine = "*"
 
 [dev-packages]
 black = "*"
-boto3-stubs = {version = "*", extras = ["s3"]}
+boto3-stubs = {extras = ["essential"], version = "*"}
 coveralls = "*"
 ipython = "*"
 moto = "*"

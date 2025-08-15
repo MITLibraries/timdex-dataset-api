@@ -1,5 +1,8 @@
 import logging
 import os
+import warnings
+
+from duckdb_engine import DuckDBEngineWarning
 
 
 def configure_logger(
@@ -28,10 +31,20 @@ def configure_logger(
         for warning_logger_name in warning_only_loggers.split(","):
             logging.getLogger(warning_logger_name).setLevel(logging.WARNING)
 
+    # suppress a SQLAlchemy duckdb_engine warning
+    warnings.filterwarnings(
+        "ignore",
+        category=DuckDBEngineWarning,
+        message=r".*doesn't yet support reflection on indices.*",
+    )
+
     return logger
 
 
 def configure_dev_logger() -> logging.Logger:
     """Invoke to setup DEBUG level console logging for development work."""
-    logging.basicConfig(level=logging.DEBUG)
-    return configure_logger(__name__)
+    if not logging.getLogger().handlers:
+        logging.basicConfig(level=logging.WARNING)
+    logger = logging.getLogger("timdex_dataset_api")
+    logger.setLevel(logging.DEBUG)
+    return logger

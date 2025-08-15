@@ -25,8 +25,10 @@ dependencies = [
     "attrs",
     "boto3",
     "duckdb",
+    "duckdb_engine",
     "pandas",
     "pyarrow",
+    "sqlalchemy"
 ]
 
 [project.optional-dependencies]
@@ -54,7 +56,7 @@ line-length = 90
 [tool.mypy]
 disallow_untyped_calls = true
 disallow_untyped_defs = true
-exclude = ["tests/", "output/"]
+exclude = ["tests/", "output/", "migrations/"]
 
 [[tool.mypy.overrides]]
 module = []
@@ -62,6 +64,9 @@ ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 log_level = "INFO"
+filterwarnings = [
+    "ignore:duckdb-engine doesn't yet support reflection on indices:duckdb_engine.DuckDBEngineWarning",
+]
 
 [tool.ruff]
 target-version = "py312"
@@ -95,6 +100,8 @@ ignore = [
     "PLR0915",
     "S321",
     "S608",
+    "TD002",
+    "TD003",
     "TRY003"
 ]
 

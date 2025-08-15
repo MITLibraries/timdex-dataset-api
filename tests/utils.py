@@ -11,7 +11,6 @@ from timdex_dataset_api import DatasetRecord
 
 def generate_sample_records(
     num_records: int,
-    timdex_record_id_prefix: str = "alma",
     source: str | None = "alma",
     run_date: str | None = "2024-12-01",
     run_type: str | None = "daily",
@@ -25,7 +24,7 @@ def generate_sample_records(
 
     for x in range(num_records):
         yield DatasetRecord(
-            timdex_record_id=f"{timdex_record_id_prefix}:{x}",
+            timdex_record_id=f"{source}:{x}",
             source_record=b"<record><title>Hello World.</title></record>",
             transformed_record=b"""{"title":["Hello World."]}""",
             source=source,
@@ -53,7 +52,6 @@ def generate_sample_records_with_simulated_partitions(
         source = random.choice(sources)
         yield from generate_sample_records(
             num_records=batch_size,
-            timdex_record_id_prefix=source,
             source=source,
             run_date=random.choice(run_dates),
             run_type=random.choice(run_types),
