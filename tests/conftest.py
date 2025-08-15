@@ -1,5 +1,6 @@
 """tests/conftest.py"""
 
+import shutil
 from collections.abc import Iterator
 
 import boto3
@@ -263,6 +264,26 @@ def timdex_metadata_with_deltas(
     td.write(records)
 
     return TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+
+
+@pytest.fixture
+def timdex_metadata_merged_deltas(
+    tmp_path, timdex_metadata_with_deltas, timdex_dataset_with_runs
+):
+    """TIMDEXDatasetMetadata after merging append deltas to static database file."""
+    # copy directory of a dataset with runs
+    dataset_location = str(tmp_path / "cloned_dataset_with_runs/")
+    shutil.copytree(timdex_metadata_with_deltas.location, dataset_location)
+
+    # clone dataset with runs using new dataset location
+    td = TIMDEXDataset(dataset_location, config=timdex_dataset_with_runs.config)
+
+    # clone metadata and merge append deltas
+    metadata = TIMDEXDatasetMetadata(td.location)
+    metadata.merge_append_deltas()
+    metadata.refresh()
+
+    return metadata
 
 
 # ================================================================================

@@ -8,6 +8,18 @@ from duckdb import DuckDBPyConnection
 
 from timdex_dataset_api import TIMDEXDatasetMetadata
 
+ORDERED_METADATA_COLUMN_NAMES = [
+    "timdex_record_id",
+    "source",
+    "run_date",
+    "run_type",
+    "action",
+    "run_id",
+    "run_record_offset",
+    "run_timestamp",
+    "filename",
+]
+
 
 def test_tdm_init_no_metadata_file_warning_success(caplog, timdex_dataset_with_runs):
     TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
@@ -264,6 +276,49 @@ def test_tdm_current_records_most_recent_version(timdex_metadata_with_deltas):
             == most_recent.iloc[0]["run_timestamp"]
         )
         assert current_version.iloc[0]["run_id"] == most_recent.iloc[0]["run_id"]
+
+
+def test_tdm_merge_append_deltas_static_counts_match_records_count_before_merge(
+    timdex_metadata_with_deltas, timdex_metadata_merged_deltas
+):
+    static_count_merged_deltas = timdex_metadata_merged_deltas.conn.query(
+        """select count(*) as count from static_db.records;"""
+    ).fetchone()[0]
+    assert static_count_merged_deltas == timdex_metadata_with_deltas.records_count
+
+
+def test_tdm_merge_append_deltas_adds_records_to_static_db(
+    timdex_metadata_with_deltas, timdex_metadata_merged_deltas
+):
+    append_deltas = timdex_metadata_with_deltas.conn.query(
+        f"""
+            select
+            {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+            from metadata.append_deltas
+        """
+    ).to_df()
+
+    merged_static_db = timdex_metadata_merged_deltas.conn.query(
+        f"""
+            select
+            {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+            from static_db.records
+        """
+    ).to_df()
+
+    assert set(map(tuple, append_deltas.to_numpy())).issubset(
+        set(map(tuple, merged_static_db.to_numpy()))
+    )
+
+
+def test_tdm_merge_append_deltas_deletes_append_deltas(
+    timdex_metadata_with_deltas, timdex_metadata_merged_deltas
+):
+    assert timdex_metadata_with_deltas.append_deltas_count != 0
+    assert os.listdir(timdex_metadata_with_deltas.append_deltas_path)
+
+    assert timdex_metadata_merged_deltas.append_deltas_count == 0
+    assert not os.listdir(timdex_metadata_merged_deltas.append_deltas_path)
 
 
 def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_and_valid(

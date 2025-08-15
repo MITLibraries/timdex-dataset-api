@@ -59,6 +59,12 @@ class S3Client:
                 return False
             raise
 
+    def list_objects(self, s3_prefix: str) -> list[str]:
+        bucket, _ = self._split_s3_uri(s3_prefix)
+        objects = [obj.key for obj in self.resource.Bucket(bucket).objects.all()]
+        logger.debug(f"Found {len(objects)} objects in {s3_prefix}: {objects}")
+        return objects
+
     def download_file(self, s3_uri: str, local_path: str | pathlib.Path) -> None:
         bucket, key = self._split_s3_uri(s3_uri)
         local_path = pathlib.Path(local_path)
