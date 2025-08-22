@@ -612,7 +612,11 @@ class TIMDEXDatasetMetadata:
         )
 
     def build_meta_query(
-        self, table: str, where: str | None, **filters: Unpack["DatasetFilters"]
+        self,
+        table: str,
+        limit: int | None,
+        where: str | None,
+        **filters: Unpack["DatasetFilters"],
     ) -> str:
         """Build SQL query using SQLAlchemy against metadata schema tables and views."""
         sa_table = self.get_sa_table(table)
@@ -637,6 +641,10 @@ class TIMDEXDatasetMetadata:
         ).select_from(sa_table)
         if combined is not None:
             stmt = stmt.where(combined)
+
+        # apply limit if present
+        if limit:
+            stmt = stmt.limit(limit)
 
         # using DuckDB dialect, compile to SQL string
         compiled = stmt.compile(

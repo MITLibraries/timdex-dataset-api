@@ -276,3 +276,9 @@ def test_dataset_load_current_records_gets_correct_same_day_daily_runs_ordering(
     # just assert it's one of the daily runs
     assert first_record["run_id"] in {"run-4", "run-5"}
     assert first_record["action"] in {"index", "delete"}
+
+
+def test_read_batches_iter_limit_returns_n_rows(timdex_dataset_multi_source):
+    batches = timdex_dataset_multi_source.read_batches_iter(limit=10)
+    table = pa.Table.from_batches(batches)
+    assert len(table) == 10
