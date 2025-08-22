@@ -249,16 +249,14 @@ class TIMDEXDatasetMetadata:
         self.conn = self.setup_duckdb_context()
         self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
 
-    def recreate_static_database_file(self) -> None:
-        """Create/recreate the static metadata database file.
+    def rebuild_dataset_metadata(self) -> None:
+        """Fully rebuild dataset metadata.
 
-        The following work is performed:
-            1. Create a local working directory
-            2. Open a DuckDB connection with a database file in this local working dir
-            3. Create tables and views by scanning ETL data in dataset/data/records
-            4. Close DuckDB connection ensuring a fully formed, local database file
-            5. Upload DuckDB database file to target destination, making that the new
-            static metadata database file
+        Work includes:
+            - remove any append deltas, understanding a full metadata rebuild
+                will pickup that data from the ETL records themselves
+            - build a local, temporary static metadata database file, then overwrite the
+                canonical version in the dataset (e.g. in S3)
         """
         if self.location_scheme == "s3":
             s3_client = S3Client()
@@ -272,7 +270,6 @@ class TIMDEXDatasetMetadata:
 
             with duckdb.connect(local_db_path) as conn:
                 self.configure_duckdb_connection(conn)
-                conn.execute("""SET threads = 64;""")
 
                 self._create_full_dataset_table(conn)
 
@@ -299,6 +296,9 @@ class TIMDEXDatasetMetadata:
         start_time = time.perf_counter()
         logger.info("creating table of full dataset metadata")
 
+        # temporarily increase thread count
+        conn.execute("""SET threads = 64;""")
+
         query = f"""
             create or replace table records as (
                 select
@@ -311,6 +311,9 @@ class TIMDEXDatasetMetadata:
             );
             """
         conn.execute(query)
+
+        # reset thread count
+        conn.execute(f"""SET threads = {self.config.duckdb_connection_threads};""")
 
         row_count = conn.query("""select count(*) from records;""").fetchone()[0]  # type: ignore[index]
         logger.info(

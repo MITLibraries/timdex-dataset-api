@@ -43,7 +43,7 @@ def test_tdm_s3_dataset_structure_properties(s3_bucket_mocked):
 
 def test_tdm_create_metadata_database_file_success(caplog, timdex_metadata_empty):
     caplog.set_level("DEBUG")
-    timdex_metadata_empty.recreate_static_database_file()
+    timdex_metadata_empty.rebuild_dataset_metadata()
 
 
 def test_tdm_init_metadata_file_found_success(timdex_metadata):

@@ -143,6 +143,10 @@ class TIMDEXDataset:
     def data_records_root(self) -> str:
         return f"{self.location.removesuffix('/')}/data/records"  # type: ignore[union-attr]
 
+    def refresh(self) -> None:
+        """Fully reload TIMDEXDataset instance."""
+        self.__init__(self.location)  # type: ignore[misc]
+
     def create_data_structure(self) -> None:
         """Ensure ETL records data structure exists in TIMDEX dataset."""
         if self.location_scheme == "file":
