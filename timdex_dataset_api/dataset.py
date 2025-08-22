@@ -375,10 +375,13 @@ class TIMDEXDataset:
             key/value DatasetFilters
             - filters: simple filtering based on key/value pairs from DatasetFilters
         """
+        start_time = time.perf_counter()
+
         # build and execute metadata query
         metadata_time = time.perf_counter()
         meta_query = self.metadata.build_meta_query(table, where, **filters)
         meta_df = self.metadata.conn.query(meta_query).to_df()
+        meta_df = meta_df.sort_values(by=["filename", "run_record_offset"])
         logger.debug(
             f"Metadata query identified {len(meta_df)} rows, "
             f"across {len(meta_df.filename.unique())} parquet files, "
@@ -409,6 +412,10 @@ class TIMDEXDataset:
                 f"read_batches_iter batch {i+1}, yielded: {batch_yield_count} "
                 f"@ {batch_rps} records/second, total yielded: {total_yield_count}"
             )
+
+        logger.debug(
+            f"read_batches_iter() elapsed: {round(time.perf_counter()-start_time, 2)}s"
+        )
 
     def _iter_meta_chunks(self, meta_df: pd.DataFrame) -> Iterator[pd.DataFrame]:
         """Utility method to yield chunks of metadata query results."""

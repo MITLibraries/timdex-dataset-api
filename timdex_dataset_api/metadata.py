@@ -334,6 +334,7 @@ class TIMDEXDatasetMetadata:
         start_time = time.perf_counter()
 
         conn = duckdb.connect()
+        conn.execute("""SET enable_progress_bar = false;""")
         self.configure_duckdb_connection(conn)
 
         if not self.database_exists():
@@ -436,36 +437,67 @@ class TIMDEXDatasetMetadata:
 
         This view builds on the table `records`.
 
-        This view includes only the most current version of each record in the dataset.
-        Because it includes the `timdex_record_id` and `run_id`, it makes yielding the
-        current version of a record via a TIMDEXDataset instance trivial: for any given
-        `timdex_record_id` if the `run_id` doesn't match, it's not the current version.
+        This metadata view includes only the most current version of each record in the
+        dataset.  With the metadata provided from this view, we can streamline data
+        retrievals in TIMDEXDataset read methods.
         """
         logger.info("creating view of current records metadata")
 
-        query = f"""
-        create or replace view metadata.current_records as
-        with ranked_records as (
-            select
-                r.*,
-                row_number() over (
-                    partition by r.timdex_record_id
-                    order by r.run_timestamp desc
-                ) as rn
-            from metadata.records r
-            where r.run_timestamp >= (
-                select max(r2.run_timestamp)
-                from metadata.records r2
-                where r2.source = r.source
-                and r2.run_type = 'full'
-            )
+        conn.execute(
+            """
+            set temp_directory = '/tmp';
+            """
         )
-        select
-            {','.join(ORDERED_METADATA_COLUMN_NAMES)}
-        from ranked_records
-        where rn = 1;
-        """
-        conn.execute(query)
+
+        conn.execute(
+            """
+            -- create temp table with current records using CTEs
+            create or replace temp table temp.main.current_records as
+            with
+                -- CTE of run_timestamp for last source full run
+                cr_source_last_full as (
+                    select
+                        source,
+                        max(run_timestamp) as last_full_ts
+                    from metadata.records
+                    where run_type = 'full'
+                    group by source
+                ),
+
+                -- CTE of all records, per source, on or after last full run
+                cr_since_last_full as (
+                    select
+                        r.*
+                    from metadata.records r
+                    join cr_source_last_full f using (source)
+                    where r.run_timestamp >= f.last_full_ts
+                ),
+
+                -- CTE of records ranked by run_timestamp, with tie breaker
+                cr_ranked_records as (
+                    select
+                        r.*,
+                        row_number() over (
+                            partition by r.source, r.timdex_record_id
+                            order by
+                                r.run_timestamp desc nulls last,
+                                r.run_id desc nulls last,
+                                r.run_record_offset desc nulls last
+                        ) as rn
+                    from cr_since_last_full r
+                )
+
+            -- final select for current records (rn = 1)
+            select
+                * exclude (rn)
+            from cr_ranked_records
+            where rn = 1;
+
+            -- create view in metadata schema
+            create or replace view metadata.current_records as
+            select * from temp.main.current_records;
+            """
+        )
 
     def merge_append_deltas(self) -> None:
         """Merge append deltas into the static metadata database file."""
@@ -602,7 +634,6 @@ class TIMDEXDatasetMetadata:
         ).select_from(sa_table)
         if combined is not None:
             stmt = stmt.where(combined)
-        stmt = stmt.order_by(sa_table.c.filename, sa_table.c.run_record_offset)
 
         # using DuckDB dialect, compile to SQL string
         compiled = stmt.compile(

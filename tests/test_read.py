@@ -125,8 +125,8 @@ def test_read_batches_where_and_dataset_filters_are_combined(timdex_dataset_mult
     [
         "SELECT * FROM current_records WHERE source = 'libguides'",
         "FROM records WHERE source = 'libguides'",
-        "source = 'libguides';",
-        " run_date = '2024-12-01';  ",
+        "ORDER BY timdex_record_id",
+        "LIMIT 3",
     ],
 )
 def test_read_batches_where_rejects_non_predicate_sql(
