@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import duckdb
 from duckdb import DuckDBPyConnection
 from duckdb_engine import Dialect as DuckDBDialect
-from sqlalchemy import Table, and_, select, text
+from sqlalchemy import Table, and_, func, select, text
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.utils import (
@@ -641,6 +641,14 @@ class TIMDEXDatasetMetadata:
         ).select_from(sa_table)
         if combined is not None:
             stmt = stmt.where(combined)
+
+        # order by filename + run_record_offset
+        # NOTE: we use a hash of the filename for ordering for a dramatic speedup, where
+        #   we don't really care about the exact order, just that they are ordered
+        stmt = stmt.order_by(
+            func.hash(sa_table.c.filename),
+            sa_table.c.run_record_offset,
+        )
 
         # apply limit if present
         if limit:

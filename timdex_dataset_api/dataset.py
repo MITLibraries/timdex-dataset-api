@@ -387,7 +387,6 @@ class TIMDEXDataset:
         metadata_time = time.perf_counter()
         meta_query = self.metadata.build_meta_query(table, limit, where, **filters)
         meta_df = self.metadata.conn.query(meta_query).to_df()
-        meta_df = meta_df.sort_values(by=["filename", "run_record_offset"])
         logger.debug(
             f"Metadata query identified {len(meta_df)} rows, "
             f"across {len(meta_df.filename.unique())} parquet files, "
