@@ -443,6 +443,14 @@ class TIMDEXDatasetMetadata:
         This metadata view includes only the most current version of each record in the
         dataset.  With the metadata provided from this view, we can streamline data
         retrievals in TIMDEXDataset read methods.
+
+        For performance reasons, the final view reads from a DuckDB temporary table that
+        is constructed, "temp.main.current_records".  Because our connection is in memory,
+        the data in this temporary table is mostly in memory but has the ability to spill
+        to disk if we risk getting too close to our memory constraints.  We explicitly
+        set the temporary location on disk for DuckDB at "/tmp" to play nice with contexts
+        like AWS ECS or Lambda, where sometimes the $HOME env var is missing; DuckDB
+        often tries to utilize the user's home directory and this works around that.
         """
         logger.info("creating view of current records metadata")
 
