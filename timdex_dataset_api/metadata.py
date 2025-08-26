@@ -476,7 +476,7 @@ class TIMDEXDatasetMetadata:
                     where r.run_timestamp >= f.last_full_ts
                 ),
 
-                -- CTE of records ranked by run_timestamp, with tie breaker
+                -- CTE of records ranked by run_timestamp
                 cr_ranked_records as (
                     select
                         r.*,
