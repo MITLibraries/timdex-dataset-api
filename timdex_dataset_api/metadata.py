@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import duckdb
 from duckdb import DuckDBPyConnection
 from duckdb_engine import Dialect as DuckDBDialect
-from sqlalchemy import Table, and_, select, text
+from sqlalchemy import Table, and_, func, select, text
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.utils import (
@@ -249,16 +249,14 @@ class TIMDEXDatasetMetadata:
         self.conn = self.setup_duckdb_context()
         self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
 
-    def recreate_static_database_file(self) -> None:
-        """Create/recreate the static metadata database file.
+    def rebuild_dataset_metadata(self) -> None:
+        """Fully rebuild dataset metadata.
 
-        The following work is performed:
-            1. Create a local working directory
-            2. Open a DuckDB connection with a database file in this local working dir
-            3. Create tables and views by scanning ETL data in dataset/data/records
-            4. Close DuckDB connection ensuring a fully formed, local database file
-            5. Upload DuckDB database file to target destination, making that the new
-            static metadata database file
+        Work includes:
+            - remove any append deltas, understanding a full metadata rebuild
+                will pickup that data from the ETL records themselves
+            - build a local, temporary static metadata database file, then overwrite the
+                canonical version in the dataset (e.g. in S3)
         """
         if self.location_scheme == "s3":
             s3_client = S3Client()
@@ -272,7 +270,6 @@ class TIMDEXDatasetMetadata:
 
             with duckdb.connect(local_db_path) as conn:
                 self.configure_duckdb_connection(conn)
-                conn.execute("""SET threads = 64;""")
 
                 self._create_full_dataset_table(conn)
 
@@ -299,6 +296,9 @@ class TIMDEXDatasetMetadata:
         start_time = time.perf_counter()
         logger.info("creating table of full dataset metadata")
 
+        # temporarily increase thread count
+        conn.execute("""SET threads = 64;""")
+
         query = f"""
             create or replace table records as (
                 select
@@ -311,6 +311,9 @@ class TIMDEXDatasetMetadata:
             );
             """
         conn.execute(query)
+
+        # reset thread count
+        conn.execute(f"""SET threads = {self.config.duckdb_connection_threads};""")
 
         row_count = conn.query("""select count(*) from records;""").fetchone()[0]  # type: ignore[index]
         logger.info(
@@ -334,6 +337,7 @@ class TIMDEXDatasetMetadata:
         start_time = time.perf_counter()
 
         conn = duckdb.connect()
+        conn.execute("""SET enable_progress_bar = false;""")
         self.configure_duckdb_connection(conn)
 
         if not self.database_exists():
@@ -436,36 +440,75 @@ class TIMDEXDatasetMetadata:
 
         This view builds on the table `records`.
 
-        This view includes only the most current version of each record in the dataset.
-        Because it includes the `timdex_record_id` and `run_id`, it makes yielding the
-        current version of a record via a TIMDEXDataset instance trivial: for any given
-        `timdex_record_id` if the `run_id` doesn't match, it's not the current version.
+        This metadata view includes only the most current version of each record in the
+        dataset.  With the metadata provided from this view, we can streamline data
+        retrievals in TIMDEXDataset read methods.
+
+        For performance reasons, the final view reads from a DuckDB temporary table that
+        is constructed, "temp.main.current_records".  Because our connection is in memory,
+        the data in this temporary table is mostly in memory but has the ability to spill
+        to disk if we risk getting too close to our memory constraints.  We explicitly
+        set the temporary location on disk for DuckDB at "/tmp" to play nice with contexts
+        like AWS ECS or Lambda, where sometimes the $HOME env var is missing; DuckDB
+        often tries to utilize the user's home directory and this works around that.
         """
         logger.info("creating view of current records metadata")
 
-        query = f"""
-        create or replace view metadata.current_records as
-        with ranked_records as (
-            select
-                r.*,
-                row_number() over (
-                    partition by r.timdex_record_id
-                    order by r.run_timestamp desc
-                ) as rn
-            from metadata.records r
-            where r.run_timestamp >= (
-                select max(r2.run_timestamp)
-                from metadata.records r2
-                where r2.source = r.source
-                and r2.run_type = 'full'
-            )
+        conn.execute(
+            """
+            set temp_directory = '/tmp';
+            """
         )
-        select
-            {','.join(ORDERED_METADATA_COLUMN_NAMES)}
-        from ranked_records
-        where rn = 1;
-        """
-        conn.execute(query)
+
+        conn.execute(
+            """
+            -- create temp table with current records using CTEs
+            create or replace temp table temp.main.current_records as
+            with
+                -- CTE of run_timestamp for last source full run
+                cr_source_last_full as (
+                    select
+                        source,
+                        max(run_timestamp) as last_full_ts
+                    from metadata.records
+                    where run_type = 'full'
+                    group by source
+                ),
+
+                -- CTE of all records, per source, on or after last full run
+                cr_since_last_full as (
+                    select
+                        r.*
+                    from metadata.records r
+                    join cr_source_last_full f using (source)
+                    where r.run_timestamp >= f.last_full_ts
+                ),
+
+                -- CTE of records ranked by run_timestamp
+                cr_ranked_records as (
+                    select
+                        r.*,
+                        row_number() over (
+                            partition by r.source, r.timdex_record_id
+                            order by
+                                r.run_timestamp desc nulls last,
+                                r.run_id desc nulls last,
+                                r.run_record_offset desc nulls last
+                        ) as rn
+                    from cr_since_last_full r
+                )
+
+            -- final select for current records (rn = 1)
+            select
+                * exclude (rn)
+            from cr_ranked_records
+            where rn = 1;
+
+            -- create view in metadata schema
+            create or replace view metadata.current_records as
+            select * from temp.main.current_records;
+            """
+        )
 
     def merge_append_deltas(self) -> None:
         """Merge append deltas into the static metadata database file."""
@@ -577,7 +620,11 @@ class TIMDEXDatasetMetadata:
         )
 
     def build_meta_query(
-        self, table: str, where: str | None, **filters: Unpack["DatasetFilters"]
+        self,
+        table: str,
+        limit: int | None,
+        where: str | None,
+        **filters: Unpack["DatasetFilters"],
     ) -> str:
         """Build SQL query using SQLAlchemy against metadata schema tables and views."""
         sa_table = self.get_sa_table(table)
@@ -602,7 +649,18 @@ class TIMDEXDatasetMetadata:
         ).select_from(sa_table)
         if combined is not None:
             stmt = stmt.where(combined)
-        stmt = stmt.order_by(sa_table.c.filename, sa_table.c.run_record_offset)
+
+        # order by filename + run_record_offset
+        # NOTE: we use a hash of the filename for ordering for a dramatic speedup, where
+        #   we don't really care about the exact order, just that they are ordered
+        stmt = stmt.order_by(
+            func.hash(sa_table.c.filename),
+            sa_table.c.run_record_offset,
+        )
+
+        # apply limit if present
+        if limit:
+            stmt = stmt.limit(limit)
 
         # using DuckDB dialect, compile to SQL string
         compiled = stmt.compile(

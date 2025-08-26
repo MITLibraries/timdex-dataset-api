@@ -113,7 +113,7 @@ def timdex_dataset_multi_source(tmp_path_factory) -> TIMDEXDataset:
         )
 
     # ensure static metadata database exists for read methods
-    dataset.metadata.recreate_static_database_file()
+    dataset.metadata.rebuild_dataset_metadata()
     dataset.metadata.refresh()
 
     return dataset
@@ -223,7 +223,7 @@ def timdex_dataset_same_day_runs(tmp_path) -> TIMDEXDataset:
 def timdex_metadata(timdex_dataset_with_runs) -> TIMDEXDatasetMetadata:
     """TIMDEXDatasetMetadata with static database file created."""
     metadata = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
-    metadata.recreate_static_database_file()
+    metadata.rebuild_dataset_metadata()
     metadata.refresh()
     return metadata
 
@@ -233,7 +233,7 @@ def timdex_dataset_with_runs_with_metadata(
     timdex_dataset_with_runs,
 ) -> TIMDEXDataset:
     """TIMDEXDataset with runs and static metadata created for read tests."""
-    timdex_dataset_with_runs.metadata.recreate_static_database_file()
+    timdex_dataset_with_runs.metadata.rebuild_dataset_metadata()
     timdex_dataset_with_runs.metadata.refresh()
     return timdex_dataset_with_runs
 

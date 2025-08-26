@@ -143,6 +143,10 @@ class TIMDEXDataset:
     def data_records_root(self) -> str:
         return f"{self.location.removesuffix('/')}/data/records"  # type: ignore[union-attr]
 
+    def refresh(self) -> None:
+        """Fully reload TIMDEXDataset instance."""
+        self.__init__(self.location)  # type: ignore[misc]
+
     def create_data_structure(self) -> None:
         """Ensure ETL records data structure exists in TIMDEX dataset."""
         if self.location_scheme == "file":
@@ -354,6 +358,7 @@ class TIMDEXDataset:
         self,
         table: str = "records",
         columns: list[str] | None = None,
+        limit: int | None = None,
         where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[pa.RecordBatch]:
@@ -371,13 +376,16 @@ class TIMDEXDataset:
         Args:
             - table: an available DuckDB view or table
             - columns: list of columns to return
+            - limit: limit number of records yielded
             - where: raw SQL WHERE clause that can be used alone, or in combination with
             key/value DatasetFilters
             - filters: simple filtering based on key/value pairs from DatasetFilters
         """
+        start_time = time.perf_counter()
+
         # build and execute metadata query
         metadata_time = time.perf_counter()
-        meta_query = self.metadata.build_meta_query(table, where, **filters)
+        meta_query = self.metadata.build_meta_query(table, limit, where, **filters)
         meta_df = self.metadata.conn.query(meta_query).to_df()
         logger.debug(
             f"Metadata query identified {len(meta_df)} rows, "
@@ -409,6 +417,10 @@ class TIMDEXDataset:
                 f"read_batches_iter batch {i+1}, yielded: {batch_yield_count} "
                 f"@ {batch_rps} records/second, total yielded: {total_yield_count}"
             )
+
+        logger.debug(
+            f"read_batches_iter() elapsed: {round(time.perf_counter()-start_time, 2)}s"
+        )
 
     def _iter_meta_chunks(self, meta_df: pd.DataFrame) -> Iterator[pd.DataFrame]:
         """Utility method to yield chunks of metadata query results."""
@@ -461,11 +473,16 @@ class TIMDEXDataset:
         self,
         table: str = "records",
         columns: list[str] | None = None,
+        limit: int | None = None,
         where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[pd.DataFrame]:
         for record_batch in self.read_batches_iter(
-            table=table, columns=columns, where=where, **filters
+            table=table,
+            columns=columns,
+            limit=limit,
+            where=where,
+            **filters,
         ):
             yield record_batch.to_pandas()
 
@@ -473,13 +490,18 @@ class TIMDEXDataset:
         self,
         table: str = "records",
         columns: list[str] | None = None,
+        limit: int | None = None,
         where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> pd.DataFrame | None:
         df_batches = [
             record_batch.to_pandas()
             for record_batch in self.read_batches_iter(
-                table=table, columns=columns, where=where, **filters
+                table=table,
+                columns=columns,
+                limit=limit,
+                where=where,
+                **filters,
             )
         ]
         if not df_batches:
@@ -490,22 +512,32 @@ class TIMDEXDataset:
         self,
         table: str = "records",
         columns: list[str] | None = None,
+        limit: int | None = None,
         where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[dict]:
         for record_batch in self.read_batches_iter(
-            table=table, columns=columns, where=where, **filters
+            table=table,
+            columns=columns,
+            limit=limit,
+            where=where,
+            **filters,
         ):
             yield from record_batch.to_pylist()
 
     def read_transformed_records_iter(
         self,
         table: str = "records",
+        limit: int | None = None,
         where: str | None = None,
         **filters: Unpack[DatasetFilters],
     ) -> Iterator[dict]:
         for record_dict in self.read_dicts_iter(
-            table=table, columns=["transformed_record"], where=where, **filters
+            table=table,
+            columns=["transformed_record"],
+            limit=limit,
+            where=where,
+            **filters,
         ):
             if transformed_record := record_dict["transformed_record"]:
                 yield json.loads(transformed_record)

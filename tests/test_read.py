@@ -125,8 +125,8 @@ def test_read_batches_where_and_dataset_filters_are_combined(timdex_dataset_mult
     [
         "SELECT * FROM current_records WHERE source = 'libguides'",
         "FROM records WHERE source = 'libguides'",
-        "source = 'libguides';",
-        " run_date = '2024-12-01';  ",
+        "ORDER BY timdex_record_id",
+        "LIMIT 3",
     ],
 )
 def test_read_batches_where_rejects_non_predicate_sql(
@@ -254,7 +254,7 @@ def test_dataset_load_current_records_gets_correct_same_day_full_run(
     timdex_dataset_same_day_runs,
 ):
     # ensure metadata exists for this dataset
-    timdex_dataset_same_day_runs.metadata.recreate_static_database_file()
+    timdex_dataset_same_day_runs.metadata.rebuild_dataset_metadata()
     timdex_dataset_same_day_runs.metadata.refresh()
     df = timdex_dataset_same_day_runs.read_dataframe(
         table="current_records", run_type="full"
@@ -265,7 +265,7 @@ def test_dataset_load_current_records_gets_correct_same_day_full_run(
 def test_dataset_load_current_records_gets_correct_same_day_daily_runs_ordering(
     timdex_dataset_same_day_runs,
 ):
-    timdex_dataset_same_day_runs.metadata.recreate_static_database_file()
+    timdex_dataset_same_day_runs.metadata.rebuild_dataset_metadata()
     timdex_dataset_same_day_runs.metadata.refresh()
     first_record = next(
         timdex_dataset_same_day_runs.read_dicts_iter(
@@ -276,3 +276,9 @@ def test_dataset_load_current_records_gets_correct_same_day_daily_runs_ordering(
     # just assert it's one of the daily runs
     assert first_record["run_id"] in {"run-4", "run-5"}
     assert first_record["action"] in {"index", "delete"}
+
+
+def test_read_batches_iter_limit_returns_n_rows(timdex_dataset_multi_source):
+    batches = timdex_dataset_multi_source.read_batches_iter(limit=10)
+    table = pa.Table.from_batches(batches)
+    assert len(table) == 10
