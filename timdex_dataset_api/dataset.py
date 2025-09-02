@@ -364,7 +364,8 @@ class TIMDEXDataset:
     ) -> Iterator[pa.RecordBatch]:
         """Yield ETL records as pyarrow.RecordBatches.
 
-        This method performs a two step process:
+        This is the base read method.  All read methods eventually drop down and use this
+        for streaming batches of records.  This method performs a two-step process:
 
             1. Perform a "metadata" query that narrows down records and physical parquet
             files to read from.
@@ -383,34 +384,43 @@ class TIMDEXDataset:
         """
         start_time = time.perf_counter()
 
-        # build and execute metadata query
-        metadata_time = time.perf_counter()
-        meta_query = self.metadata.build_meta_query(table, limit, where, **filters)
-        meta_df = self.metadata.conn.query(meta_query).to_df()
-        logger.debug(
-            f"Metadata query identified {len(meta_df)} rows, "
-            f"across {len(meta_df.filename.unique())} parquet files, "
-            f"elapsed: {round(time.perf_counter()-metadata_time,2)}s"
-        )
-
-        # execute data queries in batches and yield results
+        temp_table_name = "read_meta_chunk"
         total_yield_count = 0
-        for i, meta_chunk_df in enumerate(self._iter_meta_chunks(meta_df)):
+
+        for i, meta_chunk_df in enumerate(
+            self._iter_meta_chunks(
+                table,
+                limit=limit,
+                where=where,
+                **filters,
+            )
+        ):
             batch_time = time.perf_counter()
             batch_yield_count = len(meta_chunk_df)
             total_yield_count += batch_yield_count
 
-            if batch_yield_count == 0:
-                continue
-
-            self.conn.register("meta_chunk", meta_chunk_df)
-            data_query = self._build_data_query_for_chunk(
-                columns,
-                meta_chunk_df,
-                registered_metadata_chunk="meta_chunk",
+            self.conn.register(
+                temp_table_name,
+                meta_chunk_df[
+                    [
+                        "timdex_record_id",
+                        "run_id",
+                        "run_record_offset",
+                    ]
+                ],
             )
-            yield from self._stream_data_query_batches(data_query)
-            self.conn.unregister("meta_chunk")
+
+            # build and perform data query, yield records
+            # set in try/finally block to ensure we always deregister the meta table
+            try:
+                data_query = self._build_data_query_for_chunk(
+                    columns,
+                    meta_chunk_df,
+                    registered_metadata_chunk=temp_table_name,
+                )
+                yield from self._iter_data_chunks(data_query)
+            finally:
+                self.conn.unregister(temp_table_name)
 
             batch_rps = int(batch_yield_count / (time.perf_counter() - batch_time))
             logger.debug(
@@ -422,17 +432,71 @@ class TIMDEXDataset:
             f"read_batches_iter() elapsed: {round(time.perf_counter()-start_time, 2)}s"
         )
 
-    def _iter_meta_chunks(self, meta_df: pd.DataFrame) -> Iterator[pd.DataFrame]:
-        """Utility method to yield chunks of metadata query results."""
-        for start in range(0, len(meta_df), self.config.duckdb_join_batch_size):
-            yield meta_df.iloc[start : start + self.config.duckdb_join_batch_size]
+    def _iter_meta_chunks(
+        self,
+        table: str = "records",
+        limit: int | None = None,
+        where: str | None = None,
+        **filters: Unpack[DatasetFilters],
+    ) -> Iterator[pd.DataFrame]:
+        """Utility method to yield pandas Dataframe chunks of metadata query results.
 
-    def _build_parquet_file_list(self, meta_chunk_df: pd.DataFrame) -> str:
-        """Build SQL list of parquet filepaths."""
-        filenames = meta_chunk_df["filename"].unique().tolist()
-        if self.location_scheme == "s3":
-            filenames = [f"s3://{f.removeprefix('s3://')}" for f in filenames]
-        return "[" + ",".join((f"'{f}'") for f in filenames) + "]"
+        The approach here is to use "keyset" pagination, which means each paged result
+        is a greater-than (>) check against a tuple of ordered values from the previous
+        chunk.  This is more performant than a LIMIT + OFFSET.
+        """
+        # use duckdb_join_batch_size as the chunk size for keyset pagination
+        chunk_size = self.config.duckdb_join_batch_size
+
+        # init keyset value of zeros to begin with
+        keyset_value = (0, 0, 0)
+
+        total_yielded = 0
+        while True:
+
+            # enforce limit if passed
+            if limit is not None:
+                remaining = limit - total_yielded
+                if remaining <= 0:
+                    break
+                chunk_limit = min(chunk_size, remaining)
+            else:
+                chunk_limit = chunk_size
+
+            # perform chunk query and convert to pyarrow Table
+            meta_query = self.metadata.build_keyset_paginated_metadata_query(
+                table,
+                limit=chunk_limit,  # pass chunk_limit instead of limit
+                where=where,
+                keyset_value=keyset_value,
+                **filters,
+            )
+            meta_chunk_df = self.metadata.conn.query(meta_query).to_df()
+
+            meta_chunk_count = len(meta_chunk_df)
+
+            # an empty chunk signals end of pagination
+            if meta_chunk_count == 0:
+                break
+
+            # yield this chunk of data
+            total_yielded += meta_chunk_count
+            yield meta_chunk_df[
+                [
+                    "timdex_record_id",
+                    "run_id",
+                    "run_record_offset",
+                    "filename",
+                ]
+            ]
+
+            # update keyset value using the last row from this chunk
+            last_row = meta_chunk_df.iloc[-1]
+            keyset_value = (
+                int(last_row.filename_hash),
+                int(last_row.run_id_hash),
+                int(last_row.run_record_offset),
+            )
 
     def _build_data_query_for_chunk(
         self,
@@ -440,14 +504,32 @@ class TIMDEXDataset:
         meta_chunk_df: pd.DataFrame,
         registered_metadata_chunk: str = "meta_chunk",
     ) -> str:
-        """Build SQL query used for data retrieval, joining on metadata data."""
-        parquet_list_sql = self._build_parquet_file_list(meta_chunk_df)
-        rro_list_sql = ",".join(
-            str(rro) for rro in meta_chunk_df["run_record_offset"].unique()
-        )
+        """Build SQL query used for data retrieval, joining on passed metadata data."""
+        # build select columns
         select_cols = ",".join(
             [f"ds.{col}" for col in (columns or TIMDEX_DATASET_SCHEMA.names)]
         )
+
+        # build list of explicit parquet files to read from
+        filenames = list(meta_chunk_df["filename"].unique())
+        if self.location_scheme == "s3":
+            filenames = [
+                f"s3://{f.removeprefix('s3://')}" for f in filenames  # type: ignore[union-attr]
+            ]
+        parquet_list_sql = "[" + ",".join(f"'{f}'" for f in filenames) + "]"
+
+        # build run_record_offset WHERE clause to leverage row group pruning
+        rro_values = meta_chunk_df["run_record_offset"].unique()
+        rro_values.sort()
+        if len(rro_values) <= 1_000:  # noqa: PLR2004
+            rro_clause = (
+                f"and run_record_offset in ({','.join(str(rro) for rro in rro_values)})"
+            )
+        else:
+            rro_clause = (
+                f"and run_record_offset between {rro_values[0]} and {rro_values[-1]}"
+            )
+
         return f"""
             select
                 {select_cols}
@@ -459,15 +541,24 @@ class TIMDEXDataset:
             inner join {registered_metadata_chunk} mc using (
                 timdex_record_id, run_id, run_record_offset
             )
-            where ds.run_record_offset in ({rro_list_sql});
+            where true
+            {rro_clause};
             """
 
-    def _stream_data_query_batches(self, data_query: str) -> Iterator[pa.RecordBatch]:
-        """Yield pyarrow RecordBatches from a SQL query."""
-        self.conn.execute("set enable_progress_bar = false;")
-        cursor = self.conn.execute(data_query)
-        yield from cursor.fetch_record_batch(rows_per_batch=self.config.read_batch_size)
-        self.conn.execute("set enable_progress_bar = true;")
+    def _iter_data_chunks(self, data_query: str) -> Iterator[pa.RecordBatch]:
+        """Perform a query to retrieve data and stream chunks."""
+        if self.location_scheme == "s3":
+            self.conn.execute("""set threads=16;""")
+        try:
+            cursor = self.conn.execute(data_query)
+            yield from cursor.fetch_record_batch(
+                rows_per_batch=self.config.read_batch_size
+            )
+        finally:
+            if self.location_scheme == "s3":
+                self.conn.execute(
+                    f"""set threads={self.metadata.config.duckdb_connection_threads};"""
+                )
 
     def read_dataframes_iter(
         self,

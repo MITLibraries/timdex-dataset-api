@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 import duckdb
 from duckdb import DuckDBPyConnection
 from duckdb_engine import Dialect as DuckDBDialect
-from sqlalchemy import Table, and_, func, select, text
+from sqlalchemy import Table, func, literal, select, text, tuple_
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.utils import (
@@ -619,42 +619,56 @@ class TIMDEXDatasetMetadata:
             f"Append delta written: {output_path}, {time.perf_counter()-start_time}s"
         )
 
-    def build_meta_query(
+    def build_keyset_paginated_metadata_query(
         self,
         table: str,
-        limit: int | None,
-        where: str | None,
+        *,
+        limit: int | None = None,
+        where: str | None = None,
+        keyset_value: tuple[int, int, int] = (0, 0, 0),
         **filters: Unpack["DatasetFilters"],
     ) -> str:
         """Build SQL query using SQLAlchemy against metadata schema tables and views."""
         sa_table = self.get_sa_table(table)
 
-        # build WHERE clause filter expression based on any passed key/value filters
-        # and/or an explicit WHERE string
-        filter_expr = build_filter_expr_sa(sa_table, **filters)
-        if where is not None and where.strip():
-            text_where = text(where)
-            combined = (
-                and_(filter_expr, text_where) if filter_expr is not None else text_where
-            )
-        else:
-            combined = filter_expr
-
         # create SQL statement object
         stmt = select(
             sa_table.c.timdex_record_id,
             sa_table.c.run_id,
+            func.hash(sa_table.c.run_id).label("run_id_hash"),
             sa_table.c.run_record_offset,
             sa_table.c.filename,
+            func.hash(sa_table.c.filename).label("filename_hash"),
         ).select_from(sa_table)
-        if combined is not None:
-            stmt = stmt.where(combined)
+
+        # filter expressions from key/value filters (may return None)
+        filter_expr = build_filter_expr_sa(sa_table, **filters)
+        if filter_expr is not None:
+            stmt = stmt.where(filter_expr)
+
+        # explicit raw WHERE string
+        if where is not None and where.strip():
+            stmt = stmt.where(text(where))
+
+        # keyset pagination
+        filename_has, run_id_hash, run_record_offset_ = keyset_value
+        stmt = stmt.where(
+            tuple_(
+                func.hash(sa_table.c.filename),
+                func.hash(sa_table.c.run_id),
+                sa_table.c.run_record_offset,
+            )
+            > tuple_(
+                literal(filename_has),
+                literal(run_id_hash),
+                literal(run_record_offset_),
+            )
+        )
 
         # order by filename + run_record_offset
-        # NOTE: we use a hash of the filename for ordering for a dramatic speedup, where
-        #   we don't really care about the exact order, just that they are ordered
         stmt = stmt.order_by(
             func.hash(sa_table.c.filename),
+            func.hash(sa_table.c.run_id),
             sa_table.c.run_record_offset,
         )
 
@@ -667,7 +681,4 @@ class TIMDEXDatasetMetadata:
             dialect=DuckDBDialect(),
             compile_kwargs={"literal_binds": True},
         )
-        compiled_str = str(compiled)
-        logger.debug(compiled_str)
-
-        return compiled_str
+        return str(compiled)
