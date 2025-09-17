@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any, Unpack
 from urllib.parse import urlparse
 
 import boto3
-from duckdb.duckdb import DuckDBPyConnection  # type: ignore[import-untyped]
+from duckdb import DuckDBPyConnection  # type: ignore[import-untyped]
 from duckdb_engine import ConnectionWrapper
 from sqlalchemy import (
     MetaData,
