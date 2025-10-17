@@ -107,15 +107,22 @@ class TIMDEXDataset:
     def __init__(
         self,
         location: str,
+        *,
         config: TIMDEXDatasetConfig | None = None,
+        preload_current_records: bool = False,
     ):
         """Initialize TIMDEXDataset object.
 
         Args:
-            location (str ): Local filesystem path or an S3 URI to a parquet dataset.
+            location: Local filesystem path or an S3 URI to a parquet dataset.
+            config: Optional TIMDEXDatasetConfig instance.
+            preload_current_records: if True, create in-memory temp table for
+                current_records (faster for repeated queries); if False, create view only
+                (default, lower memory)
         """
         self.config = config or TIMDEXDatasetConfig()
         self.location = location
+        self.preload_current_records = preload_current_records
 
         self.create_data_structure()
 
@@ -125,7 +132,10 @@ class TIMDEXDataset:
         self.dataset = self.load_pyarrow_dataset()
 
         # dataset metadata
-        self.metadata = TIMDEXDatasetMetadata(location)
+        self.metadata = TIMDEXDatasetMetadata(
+            location,
+            preload_current_records=preload_current_records,
+        )
 
         # DuckDB context
         self.conn = self.setup_duckdb_context()
@@ -145,7 +155,11 @@ class TIMDEXDataset:
 
     def refresh(self) -> None:
         """Fully reload TIMDEXDataset instance."""
-        self.__init__(self.location)  # type: ignore[misc]
+        self.__init__(  # type: ignore[misc]
+            self.location,
+            config=self.config,
+            preload_current_records=self.preload_current_records,
+        )
 
     def create_data_structure(self) -> None:
         """Ensure ETL records data structure exists in TIMDEX dataset."""

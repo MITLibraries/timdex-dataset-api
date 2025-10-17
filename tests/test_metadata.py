@@ -6,7 +6,7 @@ from pathlib import Path
 
 from duckdb import DuckDBPyConnection
 
-from timdex_dataset_api import TIMDEXDatasetMetadata
+from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
 
 ORDERED_METADATA_COLUMN_NAMES = [
     "timdex_record_id",
@@ -388,3 +388,51 @@ def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_but_empty(
     )
     assert df.secret_directory == "/tmp/.duckdb/secrets"
     assert df.extension_directory == "/tmp/.duckdb/extensions"
+
+
+def test_tdm_preload_current_records_default_false(tmp_path):
+    tdm = TIMDEXDatasetMetadata(str(tmp_path))
+    assert tdm.preload_current_records is False
+
+
+def test_tdm_preload_current_records_flag_true(tmp_path):
+    tdm = TIMDEXDatasetMetadata(str(tmp_path), preload_current_records=True)
+    assert tdm.preload_current_records is True
+
+
+def test_tdm_preload_false_no_temp_table(timdex_dataset_with_runs):
+    # instantiate TIMDEXDataset without preloading current records (default)
+    td = TIMDEXDataset(timdex_dataset_with_runs.location)
+
+    # assert that materialized, temporary table "temp.current_records" does not exist
+    temp_table_count = td.metadata.conn.query(
+        """
+        select count(*)
+        from information_schema.tables
+        where table_catalog = 'temp'
+        and table_name = 'current_records'
+        and table_type = 'LOCAL TEMPORARY'
+        ;
+        """
+    ).fetchone()[0]
+
+    assert temp_table_count == 0
+
+
+def test_tdm_preload_true_has_temp_table(timdex_dataset_with_runs):
+    # instantiate TIMDEXDataset with preloading current records
+    td = TIMDEXDataset(timdex_dataset_with_runs.location, preload_current_records=True)
+
+    # assert that materialized, temporary table "temp.current_records" does exist
+    temp_table_count = td.metadata.conn.query(
+        """
+            select count(*)
+            from information_schema.tables
+            where table_catalog = 'temp'
+            and table_name = 'current_records'
+            and table_type = 'LOCAL TEMPORARY'
+            ;
+            """
+    ).fetchone()[0]
+
+    assert temp_table_count == 1
