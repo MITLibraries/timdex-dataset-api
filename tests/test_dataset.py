@@ -8,8 +8,7 @@ from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
 import pytest
-from duckdb import ConversionException
-from duckdb.duckdb import DuckDBPyConnection
+from duckdb import ConversionException, DuckDBPyConnection
 from pyarrow import fs
 
 from timdex_dataset_api.dataset import (

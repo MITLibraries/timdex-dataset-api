@@ -206,7 +206,7 @@ class TIMDEXDatasetMetadata:
                 """
             )
 
-        else:
+        elif self.location_scheme == "s3":
             conn.execute(
                 f"""
                 create or replace secret aws_s3_secret (
