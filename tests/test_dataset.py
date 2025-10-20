@@ -259,3 +259,14 @@ def test_dataset_duckdb_context_creates_data_schema(timdex_dataset):
         ).fetchone()[0]
         == 1
     )
+
+
+def test_dataset_preload_current_records_default_false(timdex_dataset):
+    assert timdex_dataset.preload_current_records is False
+    assert timdex_dataset.metadata.preload_current_records is False
+
+
+def test_dataset_preload_current_records_flag_true(tmp_path):
+    td = TIMDEXDataset(str(tmp_path), preload_current_records=True)
+    assert td.preload_current_records is True
+    assert td.metadata.preload_current_records is True

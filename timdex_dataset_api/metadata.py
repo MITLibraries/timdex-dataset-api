@@ -60,14 +60,20 @@ class TIMDEXDatasetMetadata:
     def __init__(
         self,
         location: str,
+        *,
+        preload_current_records: bool = False,
     ) -> None:
         """Init TIMDEXDatasetMetadata.
 
         Args:
             location: root location of TIMDEX dataset, e.g. 's3://timdex/dataset'
+            preload_current_records: if True, create in-memory temp table for
+                current_records (faster for repeated queries); if False, create view only
+                (default, lower memory)
         """
         self.location = location
         self.config = TIMDEXDatasetMetadataConfig()
+        self.preload_current_records = preload_current_records
 
         self.create_metadata_structure()
         self.conn: DuckDBPyConnection = self.setup_duckdb_context()
@@ -444,26 +450,20 @@ class TIMDEXDatasetMetadata:
         dataset.  With the metadata provided from this view, we can streamline data
         retrievals in TIMDEXDataset read methods.
 
-        For performance reasons, the final view reads from a DuckDB temporary table that
-        is constructed, "temp.main.current_records".  Because our connection is in memory,
-        the data in this temporary table is mostly in memory but has the ability to spill
-        to disk if we risk getting too close to our memory constraints.  We explicitly
-        set the temporary location on disk for DuckDB at "/tmp" to play nice with contexts
-        like AWS ECS or Lambda, where sometimes the $HOME env var is missing; DuckDB
-        often tries to utilize the user's home directory and this works around that.
+        By default, creates a view only (lazy evaluation). If
+        preload_current_records=True, creates a temp table for better performance
+        for repeated queries.
+
+        For temp table mode, the data is mostly in memory but has the ability to spill to
+        disk if we risk getting too close to our memory constraints. We explicitly set the
+        temporary location on disk for DuckDB at "/tmp" to play nice with contexts like
+        AWS ECS or Lambda, where sometimes the $HOME env var is missing; DuckDB often
+        tries to utilize the user's home directory and this works around that.
         """
         logger.info("creating view of current records metadata")
 
-        conn.execute(
-            """
-            set temp_directory = '/tmp';
-            """
-        )
-
-        conn.execute(
-            """
-            -- create temp table with current records using CTEs
-            create or replace temp table temp.main.current_records as
+        # SQL for the current records logic (CTEs)
+        current_records_query = """
             with
                 -- CTE of run_timestamp for last source full run
                 cr_source_last_full as (
@@ -502,13 +502,31 @@ class TIMDEXDatasetMetadata:
             select
                 * exclude (rn)
             from cr_ranked_records
-            where rn = 1;
+            where rn = 1
+        """
 
-            -- create view in metadata schema
-            create or replace view metadata.current_records as
-            select * from temp.main.current_records;
-            """
-        )
+        # create temp table (materializes in memory)
+        if self.preload_current_records:
+            conn.execute("set temp_directory = '/tmp';")
+            conn.execute(
+                f"""
+                create or replace temp table temp.main.current_records as
+                {current_records_query};
+
+                -- create view in metadata schema that points to temp table
+                create or replace view metadata.current_records as
+                select * from temp.main.current_records;
+                """
+            )
+
+        # create view only (lazy evaluation)
+        else:
+            conn.execute(
+                f"""
+                create or replace view metadata.current_records as
+                {current_records_query};
+                """
+            )
 
     def merge_append_deltas(self) -> None:
         """Merge append deltas into the static metadata database file."""
