@@ -10,7 +10,7 @@ pandas = "*"
 pyarrow = "*"
 sqlalchemy = "*"
 duckdb-engine = "*"
-duckdb = "==1.4.2.dev27"
+duckdb = "==1.4.2.dev27" # NOTE: pinned until 1.4.2 release
 
 [dev-packages]
 black = "*"
