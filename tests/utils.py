@@ -2,11 +2,13 @@
 
 # ruff: noqa: S311
 
+import json
 import random
 import uuid
 from collections.abc import Iterator
 
 from timdex_dataset_api import DatasetRecord
+from timdex_dataset_api.embeddings import DatasetEmbedding
 
 
 def generate_sample_records(
@@ -58,3 +60,37 @@ def generate_sample_records_with_simulated_partitions(
             action=random.choice(actions),
         )
         records_remaining -= batch_size
+
+
+def generate_sample_embeddings(
+    num_embeddings: int,
+    source: str | None = "alma",
+    embedding_model: str | None = "super-org/amazing-model",
+    embedding_strategy: str | None = "full_record",
+    run_id: str | None = None,
+    timestamp: str | None = "2024-12-01T00:00:00+00:00",
+) -> Iterator[DatasetEmbedding]:
+    """Generate sample DatasetEmbeddings."""
+    if not run_id:
+        run_id = str(uuid.uuid4())
+
+    for x in range(num_embeddings):
+        embedding_vector = [random.random() for _ in range(768)]
+        embedding_object = json.dumps(
+            {
+                "token1": 0.1,
+                "token2": 0.2,
+                "token3": 0.3,
+            }
+        ).encode()
+
+        yield DatasetEmbedding(
+            timdex_record_id=f"{source}:{x}",
+            run_id=run_id,
+            run_record_offset=x,
+            embedding_model=embedding_model,
+            embedding_strategy=embedding_strategy,
+            timestamp=timestamp,
+            embedding_vector=embedding_vector,
+            embedding_object=embedding_object,
+        )
