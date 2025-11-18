@@ -63,8 +63,8 @@ class DatasetEmbedding:
         converter=datetime_iso_parse,
         default=attrs.Factory(lambda: datetime.now(tz=UTC).isoformat()),
     )
-    embedding_vector: list[float] = field(default=None)
-    embedding_object: bytes = field(default=None)
+    embedding_vector: list[float] | None = field(default=None)
+    embedding_object: bytes | None = field(default=None)
 
     @property
     def year(self) -> str:
