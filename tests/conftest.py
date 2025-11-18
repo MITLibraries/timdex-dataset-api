@@ -7,9 +7,10 @@ import boto3
 import moto
 import pytest
 
-from tests.utils import generate_sample_records
+from tests.utils import generate_sample_embeddings, generate_sample_records
 from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
+from timdex_dataset_api.embeddings import DatasetEmbedding
 from timdex_dataset_api.record import DatasetRecord
 
 
@@ -303,5 +304,21 @@ def sample_records_generator():
 
     def _generate(num_records: int = 100, **kwargs) -> Iterator[DatasetRecord]:
         return generate_sample_records(num_records=num_records, **kwargs)
+
+    return _generate
+
+
+@pytest.fixture
+def sample_embeddings() -> Iterator[DatasetEmbedding]:
+    """Generate 100 sample embeddings with default parameters."""
+    return generate_sample_embeddings(num_embeddings=100)
+
+
+@pytest.fixture
+def sample_embeddings_generator():
+    """Factory fixture for generating custom sample embeddings."""
+
+    def _generate(num_embeddings: int = 100, **kwargs) -> Iterator[DatasetEmbedding]:
+        return generate_sample_embeddings(num_embeddings=num_embeddings, **kwargs)
 
     return _generate

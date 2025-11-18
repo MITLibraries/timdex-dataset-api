@@ -6,11 +6,11 @@ name = "pypi"
 [packages]
 attrs = "*"
 boto3 = "*"
+duckdb = "==1.4.2"
+duckdb-engine = "*"
 pandas = "*"
 pyarrow = "*"
 sqlalchemy = "*"
-duckdb-engine = "*"
-duckdb = "==1.4.2.dev27"
 
 [dev-packages]
 black = "*"
