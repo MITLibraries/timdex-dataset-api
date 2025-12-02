@@ -10,7 +10,10 @@ import pytest
 from tests.utils import generate_sample_embeddings, generate_sample_records
 from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
-from timdex_dataset_api.embeddings import DatasetEmbedding
+from timdex_dataset_api.embeddings import (
+    DatasetEmbedding,
+    TIMDEXEmbeddings,
+)
 from timdex_dataset_api.record import DatasetRecord
 
 
@@ -285,6 +288,18 @@ def timdex_metadata_merged_deltas(
     metadata.refresh()
 
     return metadata
+
+
+# ================================================================================
+# Dataset Embeddings Fixtures
+# ================================================================================
+@pytest.fixture
+def timdex_embeddings_with_runs(timdex_dataset_empty):
+    """TIMDEXEmbeddings with multiple runs for single strategy."""
+    embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
+    embeddings.write(generate_sample_embeddings(100, run_id="abc123"))  # run 1
+    embeddings.write(generate_sample_embeddings(50, run_id="def456"))  # run 2
+    return TIMDEXEmbeddings(timdex_dataset_empty)
 
 
 # ================================================================================
