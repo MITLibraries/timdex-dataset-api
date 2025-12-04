@@ -20,6 +20,7 @@ from duckdb import DuckDBPyConnection
 from pyarrow import fs
 
 from timdex_dataset_api.config import configure_logger
+from timdex_dataset_api.embeddings import TIMDEXEmbeddings
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 if TYPE_CHECKING:
@@ -140,6 +141,9 @@ class TIMDEXDataset:
         # DuckDB context
         self.conn = self.setup_duckdb_context()
 
+        # dataset embeddings
+        self.embeddings = TIMDEXEmbeddings(self)
+
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
         scheme = urlparse(self.location).scheme
@@ -255,7 +259,8 @@ class TIMDEXDataset:
         conn.execute("""create schema data;""")
 
         logger.debug(
-            f"DuckDB data context created, {round(time.perf_counter()-start_time,2)}s"
+            "DuckDB context created for TIMDEXDataset, "
+            f"{round(time.perf_counter()-start_time,2)}s"
         )
         return conn
 

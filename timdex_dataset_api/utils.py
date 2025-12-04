@@ -5,7 +5,7 @@ import os
 import pathlib
 import time
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, Any, Unpack
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 import boto3
@@ -21,7 +21,6 @@ from sqlalchemy import (
 if TYPE_CHECKING:
     from mypy_boto3_s3.service_resource import S3ServiceResource
 
-    from timdex_dataset_api.dataset import DatasetFilters
 
 logger = logging.getLogger(__name__)
 
@@ -161,7 +160,7 @@ def coerce_sa_predicate(field: str, value: Any) -> Any:  # noqa: ANN401
 
 def build_filter_expr_sa(
     meta_table: Table,
-    **filters: Unpack["DatasetFilters"],
+    **filters: dict,
 ) -> Any:  # noqa: ANN401
     """Build a SQLAlchemy WHERE clause predicate based on key/value DatasetFilters.
 

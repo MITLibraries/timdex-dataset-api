@@ -52,14 +52,14 @@ def test_read_batches_with_filters_gets_subset_of_dataset(timdex_dataset_multi_s
     assert timdex_dataset_multi_source.dataset.count_rows() == 5_000
 
 
-def test_read_dataframe_batches_yields_dataframes(timdex_dataset_multi_source):
+def test_read_dataframes_yields_dataframes(timdex_dataset_multi_source):
     df_iter = timdex_dataset_multi_source.read_dataframes_iter()
     df_batch = next(df_iter)
     assert isinstance(df_batch, pd.DataFrame)
     assert len(df_batch) == 1_000
 
 
-def test_read_dataframe_reads_all_dataset_rows_after_filtering(
+def test_read_dataframe_gets_full_dataset(
     timdex_dataset_multi_source,
 ):
     df = timdex_dataset_multi_source.read_dataframe()

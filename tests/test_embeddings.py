@@ -4,6 +4,8 @@ import math
 import os
 from datetime import UTC, datetime
 
+import pandas as pd
+import pyarrow as pa
 import pyarrow.dataset as ds
 
 from timdex_dataset_api.embeddings import (
@@ -11,6 +13,8 @@ from timdex_dataset_api.embeddings import (
     DatasetEmbedding,
     TIMDEXEmbeddings,
 )
+
+EMBEDDINGS_COLUMNS_SET = set(TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names)
 
 
 def test_dataset_embedding_init():
@@ -128,3 +132,82 @@ def test_embeddings_create_batches(timdex_dataset_empty, sample_embeddings_gener
     assert len(batches) == math.ceil(
         total_embeddings / timdex_dataset_empty.config.write_batch_size
     )
+
+
+def test_embeddings_read_batches_yields_pyarrow_record_batches(
+    timdex_dataset_empty, sample_embeddings_generator
+):
+    timdex_embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
+    timdex_embeddings.write(sample_embeddings_generator(100))
+    timdex_embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
+
+    batches = timdex_embeddings.read_batches_iter()
+    batch = next(batches)
+    assert isinstance(batch, pa.RecordBatch)
+
+
+def test_embeddings_read_batches_all_columns_by_default(timdex_embeddings_with_runs):
+    batches = timdex_embeddings_with_runs.read_batches_iter()
+    batch = next(batches)
+    assert set(batch.column_names) == EMBEDDINGS_COLUMNS_SET
+
+
+def test_embeddings_read_batches_filter_columns(timdex_embeddings_with_runs):
+    columns_subset = ["timdex_record_id", "run_id", "embedding_strategy"]
+    batches = timdex_embeddings_with_runs.read_batches_iter(columns=columns_subset)
+    batch = next(batches)
+    assert set(batch.column_names) == set(columns_subset)
+
+
+def test_embeddings_read_batches_gets_full_dataset(timdex_embeddings_with_runs):
+    batches = timdex_embeddings_with_runs.read_batches_iter()
+    table = pa.Table.from_batches(batches)
+    dataset = ds.dataset(
+        timdex_embeddings_with_runs.data_embeddings_root,
+        format="parquet",
+        partitioning="hive",
+    )
+    assert len(table) == dataset.count_rows()
+
+
+def test_embeddings_read_batches_with_filters_gets_subset_of_dataset(
+    timdex_embeddings_with_runs,
+):
+    batches = timdex_embeddings_with_runs.read_batches_iter(
+        run_id="abc123", embedding_strategy="full_record"
+    )
+    table = pa.Table.from_batches(batches)
+    dataset = ds.dataset(
+        timdex_embeddings_with_runs.data_embeddings_root,
+        format="parquet",
+        partitioning="hive",
+    )
+    assert len(table) == 100
+    assert len(table) < dataset.count_rows()
+
+
+def test_embeddings_read_dataframes_yields_dataframes(timdex_embeddings_with_runs):
+    df_iter = timdex_embeddings_with_runs.read_dataframes_iter()
+    df_batch = next(df_iter)
+    assert isinstance(df_batch, pd.DataFrame)
+    assert len(df_batch) == 150
+
+
+def test_embeddings_read_dataframe_gets_full_dataset(timdex_embeddings_with_runs):
+    df = timdex_embeddings_with_runs.read_dataframe()
+    dataset = ds.dataset(
+        timdex_embeddings_with_runs.data_embeddings_root,
+        format="parquet",
+        partitioning="hive",
+    )
+    assert isinstance(df, pd.DataFrame)
+    assert len(df) == dataset.count_rows()
+
+
+def test_embeddings_read_dicts_yields_dictionary_for_each_embeddings_record(
+    timdex_embeddings_with_runs,
+):
+    dict_iter = timdex_embeddings_with_runs.read_dicts_iter()
+    record = next(dict_iter)
+    assert isinstance(record, dict)
+    assert set(record.keys()) == EMBEDDINGS_COLUMNS_SET

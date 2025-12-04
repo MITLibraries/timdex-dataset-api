@@ -5,7 +5,7 @@ from timdex_dataset_api.embeddings import DatasetEmbedding, TIMDEXEmbeddings
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 from timdex_dataset_api.record import DatasetRecord
 
-__version__ = "3.6.1"
+__version__ = "3.7.0"
 
 __all__ = [
     "DatasetEmbedding",

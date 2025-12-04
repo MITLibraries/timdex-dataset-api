@@ -6,7 +6,7 @@ import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Unpack
+from typing import TYPE_CHECKING, Literal, Unpack, cast
 from urllib.parse import urlparse
 
 import duckdb
@@ -300,7 +300,7 @@ class TIMDEXDatasetMetadata:
         file.
         """
         start_time = time.perf_counter()
-        logger.info("creating table of full dataset metadata")
+        logger.debug("creating table static_db.main.records")
 
         # temporarily increase thread count
         conn.execute("""SET threads = 64;""")
@@ -362,7 +362,8 @@ class TIMDEXDatasetMetadata:
         self._create_current_records_view(conn)
 
         logger.debug(
-            f"DuckDB metadata context created, {round(time.perf_counter()-start_time,2)}s"
+            "DuckDB context created for TIMDEXDatasetMetadata, "
+            f"{round(time.perf_counter()-start_time,2)}s"
         )
         return conn
 
@@ -387,7 +388,7 @@ class TIMDEXDatasetMetadata:
         to build additional downstream views on top of *this* view.  Also noting that a
         call to .refresh() will recreate this view.
         """
-        logger.debug("creating view of append deltas")
+        logger.debug("creating view metadata.append_deltas")
 
         # get current append delta count
         append_delta_count = conn.execute(
@@ -424,7 +425,7 @@ class TIMDEXDatasetMetadata:
         conn.execute(query)
 
     def _create_records_union_view(self, conn: DuckDBPyConnection) -> None:
-        logger.debug("creating view of unioned records")
+        logger.debug("creating view metadata.records")
 
         conn.execute(
             f"""
@@ -460,7 +461,7 @@ class TIMDEXDatasetMetadata:
         AWS ECS or Lambda, where sometimes the $HOME env var is missing; DuckDB often
         tries to utilize the user's home directory and this works around that.
         """
-        logger.info("creating view of current records metadata")
+        logger.debug("creating view metadata.current_records")
 
         # SQL for the current records logic (CTEs)
         current_records_query = """
@@ -507,6 +508,7 @@ class TIMDEXDatasetMetadata:
 
         # create temp table (materializes in memory)
         if self.preload_current_records:
+            logger.debug("creating temp table temp.main.current_records")
             conn.execute("set temp_directory = '/tmp';")
             conn.execute(
                 f"""
@@ -660,7 +662,7 @@ class TIMDEXDatasetMetadata:
         ).select_from(sa_table)
 
         # filter expressions from key/value filters (may return None)
-        filter_expr = build_filter_expr_sa(sa_table, **filters)
+        filter_expr = build_filter_expr_sa(sa_table, **cast("dict", filters))
         if filter_expr is not None:
             stmt = stmt.where(filter_expr)
 
