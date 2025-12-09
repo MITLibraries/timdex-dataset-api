@@ -7,7 +7,7 @@ import random
 import uuid
 from collections.abc import Iterator
 
-from timdex_dataset_api import DatasetRecord
+from timdex_dataset_api import DatasetRecord, TIMDEXDataset
 from timdex_dataset_api.embeddings import DatasetEmbedding
 
 
@@ -93,4 +93,43 @@ def generate_sample_embeddings(
             timestamp=timestamp,
             embedding_vector=embedding_vector,
             embedding_object=embedding_object,
+        )
+
+
+def generate_sample_embeddings_for_run(
+    timdex_dataset: TIMDEXDataset,
+    run_id: str,
+    embedding_model: str | None = "super-org/amazing-model",
+    embedding_strategy: str | None = "full_record",
+    timestamp: str | None = None,
+    embedding_dimensions: int = 3,
+) -> Iterator[DatasetEmbedding]:
+    """Generate sample DatasetEmbeddings for a given ETL run."""
+    records_metadata = timdex_dataset.conn.query(
+        f"""
+    select
+        *
+    from metadata.records
+    where run_id = '{run_id}';
+    """
+    ).to_df()
+
+    if not timestamp:
+        timestamp = records_metadata.iloc[0].run_timestamp.isoformat()
+
+    for _idx, record in records_metadata.iterrows():
+        embedding_vector = [random.random() for _ in range(embedding_dimensions)]
+        embedding_object = json.dumps(
+            {f"token{x+1}": (x + 1) / 10 for x in range(embedding_dimensions)}
+        ).encode()
+
+        yield DatasetEmbedding(
+            timdex_record_id=record.timdex_record_id,
+            run_id=run_id,
+            run_record_offset=record.run_record_offset,
+            embedding_model=embedding_model,
+            embedding_strategy=embedding_strategy,
+            embedding_vector=embedding_vector,
+            embedding_object=embedding_object,
+            timestamp=timestamp,
         )
