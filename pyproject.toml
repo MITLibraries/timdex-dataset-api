@@ -28,7 +28,7 @@ dependencies = [
     "duckdb_engine",
     "pandas",
     "pyarrow",
-    "sqlalchemy"
+    "sqlalchemy==2.0.44"
 ]
 
 [project.optional-dependencies]
