@@ -411,13 +411,6 @@ class TIMDEXEmbeddings:
         embeddings_table = self.get_sa_table(table)
         metadata_table = self.timdex_dataset.metadata.get_sa_table("records")
 
-        # create SQL statement with join to metadata.records
-        join_condition = and_(
-            embeddings_table.c.timdex_record_id == metadata_table.c.timdex_record_id,
-            embeddings_table.c.run_id == metadata_table.c.run_id,
-            embeddings_table.c.run_record_offset == metadata_table.c.run_record_offset,
-        )
-
         # select specific columns or default to all from embeddings + metadata
         if columns:
             embeddings_cols = []
@@ -441,7 +434,12 @@ class TIMDEXEmbeddings:
             ]
             stmt = select(*embeddings_cols, *metadata_cols)
 
-        # build join
+        # create SQL statement with join to metadata.records
+        join_condition = and_(
+            embeddings_table.c.timdex_record_id == metadata_table.c.timdex_record_id,
+            embeddings_table.c.run_id == metadata_table.c.run_id,
+            embeddings_table.c.run_record_offset == metadata_table.c.run_record_offset,
+        )
         stmt = stmt.select_from(embeddings_table.join(metadata_table, join_condition))
 
         # split filters between embeddings and metadata tables
