@@ -68,7 +68,7 @@ def generate_sample_embeddings(
     embedding_model: str | None = "super-org/amazing-model",
     embedding_strategy: str | None = "full_record",
     run_id: str | None = None,
-    timestamp: str | None = "2024-12-01T00:00:00+00:00",
+    embedding_timestamp: str | None = "2024-12-01T00:00:00+00:00",
 ) -> Iterator[DatasetEmbedding]:
     """Generate sample DatasetEmbeddings."""
     if not run_id:
@@ -90,7 +90,7 @@ def generate_sample_embeddings(
             run_record_offset=x,
             embedding_model=embedding_model,
             embedding_strategy=embedding_strategy,
-            timestamp=timestamp,
+            embedding_timestamp=embedding_timestamp,
             embedding_vector=embedding_vector,
             embedding_object=embedding_object,
         )
@@ -101,7 +101,7 @@ def generate_sample_embeddings_for_run(
     run_id: str,
     embedding_model: str | None = "super-org/amazing-model",
     embedding_strategy: str | None = "full_record",
-    timestamp: str | None = None,
+    embedding_timestamp: str | None = None,
     embedding_dimensions: int = 3,
 ) -> Iterator[DatasetEmbedding]:
     """Generate sample DatasetEmbeddings for a given ETL run."""
@@ -114,8 +114,8 @@ def generate_sample_embeddings_for_run(
     """
     ).to_df()
 
-    if not timestamp:
-        timestamp = records_metadata.iloc[0].run_timestamp.isoformat()
+    if not embedding_timestamp:
+        embedding_timestamp = records_metadata.iloc[0].run_timestamp.isoformat()
 
     for _idx, record in records_metadata.iterrows():
         embedding_vector = [random.random() for _ in range(embedding_dimensions)]
@@ -131,5 +131,5 @@ def generate_sample_embeddings_for_run(
             embedding_strategy=embedding_strategy,
             embedding_vector=embedding_vector,
             embedding_object=embedding_object,
-            timestamp=timestamp,
+            embedding_timestamp=embedding_timestamp,
         )

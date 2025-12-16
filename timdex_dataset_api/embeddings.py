@@ -31,7 +31,7 @@ TIMDEX_DATASET_EMBEDDINGS_SCHEMA = pa.schema(
         pa.field("timdex_record_id", pa.string()),
         pa.field("run_id", pa.string()),
         pa.field("run_record_offset", pa.int32()),
-        pa.field("timestamp", pa.timestamp("us", tz="UTC")),
+        pa.field("embedding_timestamp", pa.timestamp("us", tz="UTC")),
         pa.field("embedding_model", pa.string()),
         pa.field("embedding_strategy", pa.string()),
         pa.field("embedding_vector", pa.list_(pa.float32())),
@@ -47,7 +47,7 @@ EMBEDDINGS_FILTER_COLUMNS = {
     "timdex_record_id",
     "run_id",
     "run_record_offset",
-    "timestamp",
+    "embedding_timestamp",
     "embedding_model",
     "embedding_strategy",
 }
@@ -67,7 +67,7 @@ class EmbeddingsFilters(TypedDict, total=False):
     timdex_record_id: str
     run_id: str
     run_record_offset: int
-    timestamp: str | datetime
+    embedding_timestamp: str | datetime
     embedding_model: str
     embedding_strategy: str
     # record metadata columns
@@ -92,7 +92,7 @@ class DatasetEmbedding:
         embedding_strategy: Strategy used to create embedding
             - this correlates to a transformation strategy in the timdex-embeddings CLI
             application, e.g. "full_record"
-        timestamp: Timestamp when embedding was created
+        embedding_timestamp: Timestamp when embedding was created
         embedding_vector: Numerical vector representation of embedding
             - preferred form for storing embedding as a numerical array
         embedding_object: Object representation of the embedding
@@ -105,7 +105,7 @@ class DatasetEmbedding:
     run_record_offset: int = field()
     embedding_model: str = field()
     embedding_strategy: str = field()
-    timestamp: datetime = field(  # type: ignore[assignment]
+    embedding_timestamp: datetime = field(  # type: ignore[assignment]
         converter=datetime_iso_parse,
         default=attrs.Factory(lambda: datetime.now(tz=UTC).isoformat()),
     )
@@ -114,15 +114,15 @@ class DatasetEmbedding:
 
     @property
     def year(self) -> str:
-        return self.timestamp.strftime("%Y")
+        return self.embedding_timestamp.strftime("%Y")
 
     @property
     def month(self) -> str:
-        return self.timestamp.strftime("%m")
+        return self.embedding_timestamp.strftime("%m")
 
     @property
     def day(self) -> str:
-        return self.timestamp.strftime("%d")
+        return self.embedding_timestamp.strftime("%d")
 
     def to_dict(
         self,
@@ -232,7 +232,7 @@ class TIMDEXEmbeddings:
             create or replace view data.current_embeddings as
             (
                 with
-                    -- CTE of embeddings ranked by timestamp
+                    -- CTE of embeddings ranked by embedding_timestamp
                     ce_ranked_embeddings as
                     (
                         select
@@ -240,7 +240,7 @@ class TIMDEXEmbeddings:
                             row_number() over (
                                 partition by timdex_record_id, embedding_strategy
                                 order by
-                                    timestamp desc nulls last,
+                                    embedding_timestamp desc nulls last,
                                     run_record_offset desc nulls last
                             ) as rn
                         from data.embeddings
@@ -269,7 +269,7 @@ class TIMDEXEmbeddings:
             create or replace view data.current_run_embeddings as
             (
                 with
-                    -- CTE of embeddings ranked by timestamp
+                    -- CTE of embeddings ranked by embedding_timestamp
                     ce_ranked_embeddings as
                     (
                         select
@@ -277,7 +277,7 @@ class TIMDEXEmbeddings:
                             row_number() over (
                                 partition by timdex_record_id, run_id, embedding_strategy
                                 order by
-                                    timestamp desc nulls last,
+                                    embedding_timestamp desc nulls last,
                                     run_id desc nulls last,
                                     run_record_offset desc nulls last
                             ) as rn

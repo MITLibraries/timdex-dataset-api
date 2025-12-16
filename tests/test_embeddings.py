@@ -31,7 +31,7 @@ def test_dataset_embedding_init():
         "run_record_offset": 0,
         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
         "embedding_strategy": "full_record",
-        "timestamp": "2024-12-01T10:00:00+00:00",
+        "embedding_timestamp": "2024-12-01T10:00:00+00:00",
         "embedding_vector": [0.1, 0.2, 0.3],
         "embedding_object": json.dumps(
             {"token1": 0.1, "token2": 0.2, "token3": 0.3}
@@ -41,7 +41,7 @@ def test_dataset_embedding_init():
 
     assert embedding
     assert embedding.timdex_record_id == "alma:123"
-    assert embedding.timestamp == datetime(2024, 12, 1, 10, 0, tzinfo=UTC)
+    assert embedding.embedding_timestamp == datetime(2024, 12, 1, 10, 0, tzinfo=UTC)
     assert embedding.embedding_object == b'{"token1": 0.1, "token2": 0.2, "token3": 0.3}'
 
 
@@ -52,7 +52,7 @@ def test_dataset_embedding_date_properties():
         run_record_offset=0,
         embedding_model="sentence-transformers/all-MiniLM-L6-v2",
         embedding_strategy="full_record",
-        timestamp="2024-12-01T10:00:00+00:00",
+        embedding_timestamp="2024-12-01T10:00:00+00:00",
         embedding_vector=[0.1, 0.2, 0.3],
     )
 
@@ -66,7 +66,7 @@ def test_dataset_embedding_to_dict():
         "run_record_offset": 0,
         "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
         "embedding_strategy": "full_record",
-        "timestamp": "2024-12-01T10:00:00+00:00",
+        "embedding_timestamp": "2024-12-01T10:00:00+00:00",
         "embedding_vector": [0.1, 0.2, 0.3],
         "embedding_object": None,
     }
@@ -352,14 +352,14 @@ def test_current_embeddings_view_handles_duplicate_run_embeddings(
     # first embeddings run for run "lemon-2"
     td.embeddings.write(
         generate_sample_embeddings_for_run(
-            td, run_id="lemon-2", timestamp="2025-08-02T00:00:00+00:00"
+            td, run_id="lemon-2", embedding_timestamp="2025-08-02T00:00:00+00:00"
         )
     )
 
     # second embeddings run for run "lemon-2" with a later timestamp
     td.embeddings.write(
         generate_sample_embeddings_for_run(
-            td, run_id="lemon-2", timestamp="2025-08-03T00:00:00+00:00"
+            td, run_id="lemon-2", embedding_timestamp="2025-08-03T00:00:00+00:00"
         )
     )
 
@@ -372,7 +372,7 @@ def test_current_embeddings_view_handles_duplicate_run_embeddings(
     assert len(all_lemon_2) == 10
 
     # verify both timestamps exist
-    unique_timestamps = all_lemon_2["timestamp"].unique()
+    unique_timestamps = all_lemon_2["embedding_timestamp"].unique()
     assert len(unique_timestamps) == 2
 
     # query current_embeddings for lemon source
@@ -392,8 +392,8 @@ def test_current_embeddings_view_handles_duplicate_run_embeddings(
     assert (lemon_2_result["run_date"] == date(2025, 8, 2)).all()
 
     # all lemon-2 current embeddings should have the later embedding timestamp
-    max_timestamp = all_lemon_2["timestamp"].max()
-    assert (lemon_2_result["timestamp"] == max_timestamp).all()
+    max_timestamp = all_lemon_2["embedding_timestamp"].max()
+    assert (lemon_2_result["embedding_timestamp"] == max_timestamp).all()
 
 
 def test_embeddings_view_includes_all_embeddings(timdex_dataset_for_embeddings_views):
@@ -405,14 +405,14 @@ def test_embeddings_view_includes_all_embeddings(timdex_dataset_for_embeddings_v
     # write embeddings for lemon-2 (first time) with explicit timestamp
     td.embeddings.write(
         generate_sample_embeddings_for_run(
-            td, run_id="lemon-2", timestamp="2025-08-02T00:00:00+00:00"
+            td, run_id="lemon-2", embedding_timestamp="2025-08-02T00:00:00+00:00"
         )
     )
 
     # write embeddings for lemon-2 again with later timestamp
     td.embeddings.write(
         generate_sample_embeddings_for_run(
-            td, run_id="lemon-2", timestamp="2025-08-03T00:00:00+00:00"
+            td, run_id="lemon-2", embedding_timestamp="2025-08-03T00:00:00+00:00"
         )
     )
 
