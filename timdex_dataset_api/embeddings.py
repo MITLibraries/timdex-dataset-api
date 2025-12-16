@@ -3,7 +3,7 @@ import logging
 import time
 import uuid
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import TYPE_CHECKING, TypedDict, Unpack, cast
 
 import attrs
@@ -14,7 +14,7 @@ from attrs import asdict, define, field
 from duckdb import DuckDBPyConnection
 from duckdb import IOException as DuckDBIOException
 from duckdb_engine import Dialect as DuckDBDialect
-from sqlalchemy import Table, select, text
+from sqlalchemy import Table, and_, select, text
 from sqlalchemy.types import ARRAY, FLOAT
 
 from timdex_dataset_api.record import datetime_iso_parse
@@ -31,7 +31,7 @@ TIMDEX_DATASET_EMBEDDINGS_SCHEMA = pa.schema(
         pa.field("timdex_record_id", pa.string()),
         pa.field("run_id", pa.string()),
         pa.field("run_record_offset", pa.int32()),
-        pa.field("timestamp", pa.timestamp("us", tz="UTC")),
+        pa.field("embedding_timestamp", pa.timestamp("us", tz="UTC")),
         pa.field("embedding_model", pa.string()),
         pa.field("embedding_strategy", pa.string()),
         pa.field("embedding_vector", pa.list_(pa.float32())),
@@ -43,13 +43,39 @@ TIMDEX_DATASET_EMBEDDINGS_SCHEMA = pa.schema(
 )
 
 
+EMBEDDINGS_FILTER_COLUMNS = {
+    "timdex_record_id",
+    "run_id",
+    "run_record_offset",
+    "embedding_timestamp",
+    "embedding_model",
+    "embedding_strategy",
+}
+
+# subset of record metadata columns for filtering and selecting
+METADATA_SELECT_FILTER_COLUMNS = {
+    "source",
+    "run_date",
+    "run_type",
+    "action",
+    "run_timestamp",
+}
+
+
 class EmbeddingsFilters(TypedDict, total=False):
+    # embeddings columns
     timdex_record_id: str
     run_id: str
     run_record_offset: int
-    timestamp: str | datetime
+    embedding_timestamp: str | datetime
     embedding_model: str
     embedding_strategy: str
+    # record metadata columns
+    source: str | list[str]
+    run_date: str | date | list[str | date]
+    run_type: str | list[str]
+    action: str | list[str]
+    run_timestamp: str | datetime | list[str | datetime]
 
 
 @define
@@ -66,7 +92,7 @@ class DatasetEmbedding:
         embedding_strategy: Strategy used to create embedding
             - this correlates to a transformation strategy in the timdex-embeddings CLI
             application, e.g. "full_record"
-        timestamp: Timestamp when embedding was created
+        embedding_timestamp: Timestamp when embedding was created
         embedding_vector: Numerical vector representation of embedding
             - preferred form for storing embedding as a numerical array
         embedding_object: Object representation of the embedding
@@ -79,7 +105,7 @@ class DatasetEmbedding:
     run_record_offset: int = field()
     embedding_model: str = field()
     embedding_strategy: str = field()
-    timestamp: datetime = field(  # type: ignore[assignment]
+    embedding_timestamp: datetime = field(  # type: ignore[assignment]
         converter=datetime_iso_parse,
         default=attrs.Factory(lambda: datetime.now(tz=UTC).isoformat()),
     )
@@ -88,15 +114,15 @@ class DatasetEmbedding:
 
     @property
     def year(self) -> str:
-        return self.timestamp.strftime("%Y")
+        return self.embedding_timestamp.strftime("%Y")
 
     @property
     def month(self) -> str:
-        return self.timestamp.strftime("%m")
+        return self.embedding_timestamp.strftime("%m")
 
     @property
     def day(self) -> str:
-        return self.timestamp.strftime("%d")
+        return self.embedding_timestamp.strftime("%d")
 
     def to_dict(
         self,
@@ -206,7 +232,7 @@ class TIMDEXEmbeddings:
             create or replace view data.current_embeddings as
             (
                 with
-                    -- CTE of embeddings ranked by timestamp
+                    -- CTE of embeddings ranked by embedding_timestamp
                     ce_ranked_embeddings as
                     (
                         select
@@ -214,7 +240,7 @@ class TIMDEXEmbeddings:
                             row_number() over (
                                 partition by timdex_record_id, embedding_strategy
                                 order by
-                                    timestamp desc nulls last,
+                                    embedding_timestamp desc nulls last,
                                     run_record_offset desc nulls last
                             ) as rn
                         from data.embeddings
@@ -243,7 +269,7 @@ class TIMDEXEmbeddings:
             create or replace view data.current_run_embeddings as
             (
                 with
-                    -- CTE of embeddings ranked by timestamp
+                    -- CTE of embeddings ranked by embedding_timestamp
                     ce_ranked_embeddings as
                     (
                         select
@@ -251,7 +277,7 @@ class TIMDEXEmbeddings:
                             row_number() over (
                                 partition by timdex_record_id, run_id, embedding_strategy
                                 order by
-                                    timestamp desc nulls last,
+                                    embedding_timestamp desc nulls last,
                                     run_id desc nulls last,
                                     run_record_offset desc nulls last
                             ) as rn
@@ -356,7 +382,7 @@ class TIMDEXEmbeddings:
 
         data_query = self._build_query(
             table,
-            columns or TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names,
+            columns,
             limit,
             where,
             **filters,
@@ -379,21 +405,64 @@ class TIMDEXEmbeddings:
         """Build SQL query using SQLAlchemy.
 
         The method returns a SQL query string, which SQLAlchemy executes to
-        fetch results.
+        fetch results. Always joins to metadata.records to enable filtering
+        by metadata columns (source, run_date, run_type, action, run_timestamp).
         """
-        sa_table = self.get_sa_table(table)
+        embeddings_table = self.get_sa_table(table)
+        metadata_table = self.timdex_dataset.metadata.get_sa_table("records")
 
-        # create SQL statement object
-        # select named columns
+        # select specific columns or default to all from embeddings + metadata
         if columns:
-            stmt = select(*sa_table.c[*columns]).select_from(sa_table)
-        else:
-            stmt = select(sa_table).select_from(sa_table)
+            embeddings_cols = []
+            metadata_cols = []
 
-        # filter expressions from key/value filters (may return None)
-        filter_expr = build_filter_expr_sa(sa_table, **cast("dict", filters))
-        if filter_expr is not None:
-            stmt = stmt.where(filter_expr)
+            for col_name in columns:
+                if col_name in TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names:
+                    embeddings_cols.append(embeddings_table.c[col_name])
+                elif col_name in METADATA_SELECT_FILTER_COLUMNS:
+                    metadata_cols.append(metadata_table.c[col_name])
+                else:
+                    raise ValueError(f"Invalid column: {col_name}")
+
+            stmt = select(*embeddings_cols, *metadata_cols)
+        else:
+            embeddings_cols = [
+                embeddings_table.c[col] for col in TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names
+            ]
+            metadata_cols = [
+                metadata_table.c[col] for col in METADATA_SELECT_FILTER_COLUMNS
+            ]
+            stmt = select(*embeddings_cols, *metadata_cols)
+
+        # create SQL statement with join to metadata.records
+        join_condition = and_(
+            embeddings_table.c.timdex_record_id == metadata_table.c.timdex_record_id,
+            embeddings_table.c.run_id == metadata_table.c.run_id,
+            embeddings_table.c.run_record_offset == metadata_table.c.run_record_offset,
+        )
+        stmt = stmt.select_from(embeddings_table.join(metadata_table, join_condition))
+
+        # split filters between embeddings and metadata tables
+        embeddings_filters = {
+            k: v for k, v in filters.items() if k in EMBEDDINGS_FILTER_COLUMNS
+        }
+        record_metadata_filters = {
+            k: v for k, v in filters.items() if k in METADATA_SELECT_FILTER_COLUMNS
+        }
+
+        # apply embeddings filters
+        embeddings_filter_expr = build_filter_expr_sa(
+            embeddings_table, **cast("dict", embeddings_filters)
+        )
+        if embeddings_filter_expr is not None:
+            stmt = stmt.where(embeddings_filter_expr)
+
+        # apply metadata filters
+        record_metadata_filter_expr = build_filter_expr_sa(
+            metadata_table, **cast("dict", record_metadata_filters)
+        )
+        if record_metadata_filter_expr is not None:
+            stmt = stmt.where(record_metadata_filter_expr)
 
         # explicit raw WHERE string
         if where is not None and where.strip():

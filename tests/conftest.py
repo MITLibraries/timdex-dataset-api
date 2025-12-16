@@ -7,7 +7,11 @@ import boto3
 import moto
 import pytest
 
-from tests.utils import generate_sample_embeddings, generate_sample_records
+from tests.utils import (
+    generate_sample_embeddings,
+    generate_sample_embeddings_for_run,
+    generate_sample_records,
+)
 from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
 from timdex_dataset_api.embeddings import (
@@ -294,12 +298,112 @@ def timdex_metadata_merged_deltas(
 # Dataset Embeddings Fixtures
 # ================================================================================
 @pytest.fixture
-def timdex_embeddings_with_runs(timdex_dataset_empty):
-    """TIMDEXEmbeddings with multiple runs for single strategy."""
-    embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
-    embeddings.write(generate_sample_embeddings(100, run_id="abc123"))  # run 1
-    embeddings.write(generate_sample_embeddings(50, run_id="def456"))  # run 2
-    return TIMDEXEmbeddings(timdex_dataset_empty)
+def timdex_embeddings_with_runs(timdex_dataset_empty) -> TIMDEXEmbeddings:
+    """TIMDEXEmbeddings with multiple runs for single strategy.
+
+    Also writes matching records and rebuilds metadata so embeddings queries
+    can join to metadata.records.
+    """
+    timdex_dataset = timdex_dataset_empty
+
+    # write matching records for embeddings
+    timdex_dataset.write(
+        generate_sample_records(100, source="alma", run_id="abc123"),
+        write_append_deltas=False,
+    )
+    timdex_dataset.write(
+        generate_sample_records(50, source="alma", run_id="def456"),
+        write_append_deltas=False,
+    )
+
+    # reload TIMDEXDataset instance and build metadata
+    timdex_dataset.metadata.rebuild_dataset_metadata()
+    timdex_dataset = TIMDEXDataset(timdex_dataset.location)
+
+    # write embeddings
+    timdex_dataset.embeddings.write(
+        generate_sample_embeddings_for_run(timdex_dataset, run_id="abc123")
+    )
+    timdex_dataset.embeddings.write(
+        generate_sample_embeddings_for_run(timdex_dataset, run_id="def456")
+    )
+
+    # reload TIMDEXDataset instance once more
+    return TIMDEXDataset(timdex_dataset_empty.location).embeddings
+
+
+@pytest.fixture
+def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
+    """TIMDEXDataset with records for testing embeddings views.
+
+    Creates three scenarios to test DuckDB views:
+    - apple: single full run with 10 records
+    - orange: full run with 10 records + daily run with 5 records
+    - lemon: full run with 10 records + daily run with 5 records
+    """
+    timdex_dataset_dataset = timdex_dataset_empty
+
+    # scenario 1: apple - single full run
+    timdex_dataset_dataset.write(
+        generate_sample_records(
+            num_records=10,
+            source="apple",
+            run_date="2025-06-01",
+            run_type="full",
+            run_id="apple-1",
+        ),
+        write_append_deltas=False,
+    )
+
+    # scenario 2: orange - full run + daily run
+    timdex_dataset_dataset.write(
+        generate_sample_records(
+            num_records=10,
+            source="orange",
+            run_date="2025-07-01",
+            run_type="full",
+            run_id="orange-1",
+        ),
+        write_append_deltas=False,
+    )
+    timdex_dataset_dataset.write(
+        generate_sample_records(
+            num_records=5,
+            source="orange",
+            run_date="2025-07-02",
+            run_type="daily",
+            run_id="orange-2",
+        ),
+        write_append_deltas=False,
+    )
+
+    # scenario 3: lemon - full run + daily run (daily will be embedded twice)
+    timdex_dataset_dataset.write(
+        generate_sample_records(
+            num_records=10,
+            source="lemon",
+            run_date="2025-08-01",
+            run_type="full",
+            run_id="lemon-1",
+        ),
+        write_append_deltas=False,
+    )
+    timdex_dataset_dataset.write(
+        generate_sample_records(
+            num_records=5,
+            source="lemon",
+            run_date="2025-08-02",
+            run_type="daily",
+            run_id="lemon-2",
+        ),
+        write_append_deltas=False,
+    )
+
+    # rebuild metadata so records can be queried
+    timdex_dataset_dataset.metadata.rebuild_dataset_metadata()
+
+    # reload dataset to work around bug
+    return TIMDEXDataset(timdex_dataset_dataset.location)
 
 
 # ================================================================================
