@@ -255,7 +255,6 @@ def test_dataset_load_current_records_gets_correct_same_day_full_run(
 ):
     # ensure metadata exists for this dataset
     timdex_dataset_same_day_runs.metadata.rebuild_dataset_metadata()
-    timdex_dataset_same_day_runs.metadata.refresh()
     df = timdex_dataset_same_day_runs.read_dataframe(
         table="current_records", run_type="full"
     )
@@ -266,7 +265,6 @@ def test_dataset_load_current_records_gets_correct_same_day_daily_runs_ordering(
     timdex_dataset_same_day_runs,
 ):
     timdex_dataset_same_day_runs.metadata.rebuild_dataset_metadata()
-    timdex_dataset_same_day_runs.metadata.refresh()
     first_record = next(
         timdex_dataset_same_day_runs.read_dicts_iter(
             table="current_records", run_type="daily"

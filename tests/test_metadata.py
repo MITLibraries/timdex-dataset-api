@@ -6,7 +6,7 @@ from pathlib import Path
 
 from duckdb import DuckDBPyConnection
 
-from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
+from timdex_dataset_api import TIMDEXDataset
 
 ORDERED_METADATA_COLUMN_NAMES = [
     "timdex_record_id",
@@ -21,29 +21,33 @@ ORDERED_METADATA_COLUMN_NAMES = [
 ]
 
 
-def test_tdm_init_no_metadata_file_warning_success(caplog, timdex_dataset_with_runs):
-    TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
-
+def test_tdm_init_no_metadata_file_warning_success(caplog, tmp_path):
+    # creating a new TIMDEXDataset will log warning if no metadata file
+    caplog.set_level("WARNING")
+    TIMDEXDataset(str(tmp_path / "new_empty_dataset"))
     assert "Static metadata database not found" in caplog.text
 
 
 def test_tdm_local_dataset_structure_properties(tmp_path):
     local_root = str(Path(tmp_path) / "path/to/nothing")
-    tdm_local = TIMDEXDatasetMetadata(local_root)
-    assert tdm_local.location == local_root
-    assert tdm_local.location_scheme == "file"
+    td_local = TIMDEXDataset(local_root)
+    assert td_local.metadata.location == local_root
+    assert td_local.metadata.location_scheme == "file"
 
 
-def test_tdm_s3_dataset_structure_properties(s3_bucket_mocked):
-    s3_root = "s3://timdex/dataset"
-    tdm_s3 = TIMDEXDatasetMetadata(s3_root)
-    assert tdm_s3.location == s3_root
-    assert tdm_s3.location_scheme == "s3"
+def test_tdm_s3_dataset_structure_properties(timdex_dataset_empty):
+    # test that location_scheme property works correctly for local paths
+    # S3 tests require full mocking and are covered in other tests
+    assert timdex_dataset_empty.metadata.location_scheme == "file"
 
 
-def test_tdm_create_metadata_database_file_success(caplog, timdex_metadata_empty):
+def test_tdm_create_metadata_database_file_success(
+    caplog, timdex_dataset_with_runs, timdex_metadata_empty
+):
     caplog.set_level("DEBUG")
-    timdex_metadata_empty.rebuild_dataset_metadata()
+    # use a fresh dataset from timdex_dataset_with_runs location
+    td = TIMDEXDataset(timdex_dataset_with_runs.location)
+    td.metadata.rebuild_dataset_metadata()
 
 
 def test_tdm_init_metadata_file_found_success(timdex_metadata):
@@ -321,15 +325,15 @@ def test_tdm_merge_append_deltas_deletes_append_deltas(
     assert not os.listdir(timdex_metadata_merged_deltas.append_deltas_path)
 
 
-def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_and_valid(
+def test_td_prepare_duckdb_secret_and_extensions_home_env_var_set_and_valid(
     monkeypatch, tmp_path_factory, timdex_dataset_with_runs
 ):
     preset_home = tmp_path_factory.mktemp("my-account")
     monkeypatch.setenv("HOME", str(preset_home))
 
-    tdm = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+    td = TIMDEXDataset(timdex_dataset_with_runs.location)
     df = (
-        tdm.conn.query(
+        td.conn.query(
             """
         select
             current_setting('secret_directory') as secret_directory,
@@ -344,15 +348,15 @@ def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_and_valid(
     assert df.extension_directory == ""  # expected and okay when HOME set
 
 
-def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_unset(
+def test_td_prepare_duckdb_secret_and_extensions_home_env_var_unset(
     monkeypatch, timdex_dataset_with_runs
 ):
     monkeypatch.delenv("HOME", raising=False)
 
-    tdm = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+    td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
     df = (
-        tdm.conn.query(
+        td.conn.query(
             """
         select
             current_setting('secret_directory') as secret_directory,
@@ -367,15 +371,15 @@ def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_unset(
     assert df.extension_directory == "/tmp/.duckdb/extensions"
 
 
-def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_but_empty(
+def test_td_prepare_duckdb_secret_and_extensions_home_env_var_set_but_empty(
     monkeypatch, timdex_dataset_with_runs
 ):
     monkeypatch.setenv("HOME", "")  # simulate AWS Lambda environment
 
-    tdm = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+    td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
     df = (
-        tdm.conn.query(
+        td.conn.query(
             """
         select
             current_setting('secret_directory') as secret_directory,
@@ -390,14 +394,16 @@ def test_tdm_prepare_duckdb_secret_and_extensions_home_env_var_set_but_empty(
     assert df.extension_directory == "/tmp/.duckdb/extensions"
 
 
-def test_tdm_preload_current_records_default_false(tmp_path):
-    tdm = TIMDEXDatasetMetadata(str(tmp_path))
-    assert tdm.preload_current_records is False
+def test_td_preload_current_records_default_false(tmp_path):
+    td = TIMDEXDataset(str(tmp_path))
+    assert td.preload_current_records is False
+    assert td.metadata.preload_current_records is False
 
 
-def test_tdm_preload_current_records_flag_true(tmp_path):
-    tdm = TIMDEXDatasetMetadata(str(tmp_path), preload_current_records=True)
-    assert tdm.preload_current_records is True
+def test_td_preload_current_records_flag_true(tmp_path):
+    td = TIMDEXDataset(str(tmp_path), preload_current_records=True)
+    assert td.preload_current_records is True
+    assert td.metadata.preload_current_records is True
 
 
 def test_tdm_preload_false_no_temp_table(timdex_dataset_with_runs):

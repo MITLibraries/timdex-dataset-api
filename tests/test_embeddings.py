@@ -152,12 +152,13 @@ def test_embeddings_read_batches_yields_pyarrow_record_batches(
     timdex_dataset_empty.metadata.rebuild_dataset_metadata()
     timdex_dataset_empty.refresh()
 
-    # write embeddings
-    timdex_embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
-    timdex_embeddings.write(sample_embeddings_generator(100, run_id="test-run"))
-    timdex_embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
+    # write embeddings and refresh to pick up new views
+    timdex_dataset_empty.embeddings.write(
+        sample_embeddings_generator(100, run_id="test-run")
+    )
+    timdex_dataset_empty.refresh()
 
-    batches = timdex_embeddings.read_batches_iter()
+    batches = timdex_dataset_empty.embeddings.read_batches_iter()
     batch = next(batches)
     assert isinstance(batch, pa.RecordBatch)
 

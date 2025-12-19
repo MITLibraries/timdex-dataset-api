@@ -16,12 +16,15 @@ import boto3
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
-from duckdb import DuckDBPyConnection
+from duckdb_engine import ConnectionWrapper
 from pyarrow import fs
+from sqlalchemy import MetaData, Table, create_engine
+from sqlalchemy.types import ARRAY, FLOAT
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.embeddings import TIMDEXEmbeddings
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
+from timdex_dataset_api.utils import DuckDBConnectionFactory
 
 if TYPE_CHECKING:
     from timdex_dataset_api.record import DatasetRecord  # pragma: nocover
@@ -78,6 +81,10 @@ class TIMDEXDatasetConfig:
         from a dataset; pyarrow default is 16
     - fragment_read_ahead: number of fragments to optimistically read ahead when batch
         reaching from a dataset; pyarrow default is 4
+    - duckdb_join_batch_size: batch size for keyset pagination when joining metadata
+
+    Note: DuckDB connection settings (memory_limit, threads) are handled by
+    DuckDBConnectionFactory via TDA_DUCKDB_MEMORY_LIMIT and TDA_DUCKDB_THREADS env vars.
     """
 
     read_batch_size: int = field(
@@ -132,17 +139,20 @@ class TIMDEXDataset:
         self.partition_columns = TIMDEX_DATASET_PARTITION_COLUMNS
         self.dataset = self.load_pyarrow_dataset()
 
-        # dataset metadata
-        self.metadata = TIMDEXDatasetMetadata(
-            location,
-            preload_current_records=preload_current_records,
-        )
+        # create DuckDB connection used by all classes
+        self.conn_factory = DuckDBConnectionFactory(location_scheme=self.location_scheme)
+        self.conn = self.conn_factory.create_connection()
 
-        # DuckDB context
-        self.conn = self.setup_duckdb_context()
+        # create schemas
+        self._create_duckdb_schemas()
 
-        # dataset embeddings
+        # composed components receive self
+        self.metadata = TIMDEXDatasetMetadata(self)
         self.embeddings = TIMDEXEmbeddings(self)
+
+        # SQLAlchemy (SA) reflection after components have set up their views
+        self.sa_tables: dict[str, dict[str, Table]] = {}
+        self.reflect_sa_tables()
 
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
@@ -158,7 +168,7 @@ class TIMDEXDataset:
         return f"{self.location.removesuffix('/')}/data/records"  # type: ignore[union-attr]
 
     def refresh(self) -> None:
-        """Fully reload TIMDEXDataset instance."""
+        """Refresh dataset by fully reinitializing."""
         self.__init__(  # type: ignore[misc]
             self.location,
             config=self.config,
@@ -245,24 +255,54 @@ class TIMDEXDataset:
             session_token=credentials.token,
         )
 
-    def setup_duckdb_context(self) -> DuckDBPyConnection:
-        """Create a DuckDB connection that metadata and data query and retrieval.
+    def _create_duckdb_schemas(self) -> None:
+        """Create DuckDB schemas used by all components."""
+        self.conn.execute("create schema metadata;")
+        self.conn.execute("create schema data;")
 
-        This method extends TIMDEXDatasetMetadata's pre-existing DuckDB connection, adding
-        a 'data' schema and any other configurations needed.
+    def reflect_sa_tables(self, schemas: list[str] | None = None) -> None:
+        """Reflect SQLAlchemy metadata for DuckDB schemas.
+
+        This centralizes SA reflection for all composed components. Reflected tables
+        are stored in self.sa_tables as {schema: {table_name: Table}}.
+
+        Args:
+            schemas: list of schemas to reflect; defaults to ["metadata", "data"]
         """
         start_time = time.perf_counter()
+        schemas = schemas or ["metadata", "data"]
 
-        conn = self.metadata.conn
+        engine = create_engine(
+            "duckdb://",
+            creator=lambda: ConnectionWrapper(self.conn),
+        )
 
-        # create data schema
-        conn.execute("""create schema data;""")
+        for schema in schemas:
+            db_metadata = MetaData()
+            db_metadata.reflect(bind=engine, schema=schema, views=True)
+
+            # store tables in flat dict keyed by table name (without schema prefix)
+            self.sa_tables[schema] = {
+                table_name.removeprefix(f"{schema}."): table
+                for table_name, table in db_metadata.tables.items()
+            }
+
+        # type fixup for embedding_vector column (DuckDB LIST -> SA ARRAY)
+        if "embeddings" in self.sa_tables.get("data", {}):
+            self.sa_tables["data"]["embeddings"].c.embedding_vector.type = ARRAY(FLOAT)
 
         logger.debug(
-            "DuckDB context created for TIMDEXDataset, "
-            f"{round(time.perf_counter()-start_time,2)}s"
+            f"SQLAlchemy reflection complete for schemas {schemas}, "
+            f"{round(time.perf_counter() - start_time, 3)}s"
         )
-        return conn
+
+    def get_sa_table(self, schema: str, table: str) -> Table:
+        """Get a reflected SQLAlchemy Table by schema and table name."""
+        if schema not in self.sa_tables:
+            raise ValueError(f"Schema '{schema}' not found in reflected SA tables.")
+        if table not in self.sa_tables[schema]:
+            raise ValueError(f"Table '{table}' not found in schema '{schema}'.")
+        return self.sa_tables[schema][table]
 
     def write(
         self,
@@ -326,7 +366,7 @@ class TIMDEXDataset:
         if write_append_deltas:
             for written_file in written_files:
                 self.metadata.write_append_delta_duckdb(written_file.path)  # type: ignore[attr-defined]
-            self.metadata.refresh()
+            self.refresh()
 
         self.log_write_statistics(start_time, written_files)
 
@@ -575,9 +615,7 @@ class TIMDEXDataset:
             )
         finally:
             if self.location_scheme == "s3":
-                self.conn.execute(
-                    f"""set threads={self.metadata.config.duckdb_connection_threads};"""
-                )
+                self.conn.execute(f"""set threads={self.conn_factory.threads};""")
 
     def read_dataframes_iter(
         self,

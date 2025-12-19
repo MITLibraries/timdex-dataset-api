@@ -5,11 +5,13 @@ import os
 import pathlib
 import time
 from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, Any
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Literal
 from urllib.parse import urlparse
 
 import boto3
-from duckdb import DuckDBPyConnection  # type: ignore[import-untyped]
+import duckdb
+from duckdb import DuckDBPyConnection
 from duckdb_engine import ConnectionWrapper
 from sqlalchemy import (
     MetaData,
@@ -104,6 +106,109 @@ class S3Client:
         bucket = parsed.netloc
         key = parsed.path.lstrip("/")  # strip leading slash from /key
         return bucket, key
+
+
+class DuckDBConnectionFactory:
+    """Factory for creating and configuring DuckDB connections.
+
+    Args:
+        location_scheme: "file" or "s3", determines S3 credential setup
+        memory_limit: DuckDB memory limit (env: TDA_DUCKDB_MEMORY_LIMIT, default: "4GB")
+        threads: DuckDB thread limit (env: TDA_DUCKDB_THREADS, default: 8)
+    """
+
+    def __init__(
+        self,
+        location_scheme: Literal["file", "s3"] = "file",
+        memory_limit: str | None = None,
+        threads: int | None = None,
+    ):
+        self.location_scheme = location_scheme
+        self.memory_limit = memory_limit or os.getenv("TDA_DUCKDB_MEMORY_LIMIT", "4GB")
+        self.threads = threads or int(os.getenv("TDA_DUCKDB_THREADS", "8"))
+
+    def create_connection(self, path: str = ":memory:") -> DuckDBPyConnection:
+        """Create a new configured DuckDB connection.
+
+        Args:
+            path: Database file path or ":memory:" for in-memory database (default)
+        """
+        start_time = time.perf_counter()
+        conn = duckdb.connect(path)
+        conn.execute("SET enable_progress_bar = false;")
+        self.configure_connection(conn)
+        logger.debug(
+            f"DuckDB connection created, {round(time.perf_counter()-start_time,2)}s"
+        )
+        return conn
+
+    def configure_connection(self, conn: DuckDBPyConnection) -> None:
+        """Configure an existing DuckDB connection."""
+        self._install_extensions(conn)
+        self._configure_s3_secret(conn)
+        self._configure_memory_profile(conn)
+
+    def _install_extensions(self, conn: DuckDBPyConnection) -> None:
+        """Ensure DuckDB capable of installing extensions and install any required."""
+        home_env = os.getenv("HOME")
+        use_fallback_home = not home_env or not Path(home_env).is_dir()
+
+        if use_fallback_home:
+            duckdb_home = Path("/tmp/.duckdb")  # noqa: S108
+            secrets_dir = duckdb_home / "secrets"
+            extensions_dir = duckdb_home / "extensions"
+
+            secrets_dir.mkdir(parents=True, exist_ok=True)
+            extensions_dir.mkdir(parents=True, exist_ok=True)
+
+            conn.execute(f"set secret_directory='{secrets_dir.as_posix()}';")
+            conn.execute(f"set extension_directory='{extensions_dir.as_posix()}';")
+
+        conn.execute(
+            """
+            install httpfs;
+            load httpfs;
+            """
+        )
+
+    def _configure_s3_secret(self, conn: DuckDBPyConnection) -> None:
+        """Configure a secret in a DuckDB connection for S3 access."""
+        if os.getenv("MINIO_S3_ENDPOINT_URL"):
+            conn.execute(
+                f"""
+                create or replace secret minio_s3_secret (
+                    type s3,
+                    endpoint '{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}',
+                    key_id '{os.environ["MINIO_USERNAME"]}',
+                    secret '{os.environ["MINIO_PASSWORD"]}',
+                    region 'us-east-1',
+                    url_style 'path',
+                    use_ssl false
+                );
+                """
+            )
+
+        elif self.location_scheme == "s3":
+            conn.execute(
+                """
+                create or replace secret aws_s3_secret (
+                    type s3,
+                    provider credential_chain,
+                    refresh true
+                );
+                """
+            )
+
+    def _configure_memory_profile(self, conn: DuckDBPyConnection) -> None:
+        """Configure DuckDB memory and thread settings."""
+        conn.execute(
+            f"""
+            set enable_external_file_cache = false;
+            set memory_limit = '{self.memory_limit}';
+            set threads = {self.threads};
+            set preserve_insertion_order=false;
+            """
+        )
 
 
 def sa_reflect_duckdb_conn(

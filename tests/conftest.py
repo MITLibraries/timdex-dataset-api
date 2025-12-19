@@ -12,12 +12,13 @@ from tests.utils import (
     generate_sample_embeddings_for_run,
     generate_sample_records,
 )
-from timdex_dataset_api import TIMDEXDataset, TIMDEXDatasetMetadata
+from timdex_dataset_api import TIMDEXDataset
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
 from timdex_dataset_api.embeddings import (
     DatasetEmbedding,
     TIMDEXEmbeddings,
 )
+from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 from timdex_dataset_api.record import DatasetRecord
 
 
@@ -230,10 +231,8 @@ def timdex_dataset_same_day_runs(tmp_path) -> TIMDEXDataset:
 @pytest.fixture(scope="module")
 def timdex_metadata(timdex_dataset_with_runs) -> TIMDEXDatasetMetadata:
     """TIMDEXDatasetMetadata with static database file created."""
-    metadata = TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
-    metadata.rebuild_dataset_metadata()
-    metadata.refresh()
-    return metadata
+    timdex_dataset_with_runs.metadata.rebuild_dataset_metadata()
+    return timdex_dataset_with_runs.metadata
 
 
 @pytest.fixture(scope="module")
@@ -247,9 +246,9 @@ def timdex_dataset_with_runs_with_metadata(
 
 
 @pytest.fixture
-def timdex_metadata_empty(timdex_dataset_with_runs) -> TIMDEXDatasetMetadata:
+def timdex_metadata_empty(timdex_dataset_empty) -> TIMDEXDatasetMetadata:
     """TIMDEXDatasetMetadata without static database file."""
-    return TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+    return timdex_dataset_empty.metadata
 
 
 @pytest.fixture
@@ -271,7 +270,8 @@ def timdex_metadata_with_deltas(
     )
     td.write(records)
 
-    return TIMDEXDatasetMetadata(timdex_dataset_with_runs.location)
+    # return fresh TIMDEXDataset's metadata
+    return TIMDEXDataset(timdex_dataset_with_runs.location).metadata
 
 
 @pytest.fixture
@@ -286,12 +286,11 @@ def timdex_metadata_merged_deltas(
     # clone dataset with runs using new dataset location
     td = TIMDEXDataset(dataset_location, config=timdex_dataset_with_runs.config)
 
-    # clone metadata and merge append deltas
-    metadata = TIMDEXDatasetMetadata(td.location)
-    metadata.merge_append_deltas()
-    metadata.refresh()
+    # merge append deltas via the TD's metadata
+    td.metadata.merge_append_deltas()
+    td.refresh()
 
-    return metadata
+    return td.metadata
 
 
 # ================================================================================
