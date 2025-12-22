@@ -358,6 +358,19 @@ class TIMDEXEmbeddings:
         """
         start_time = time.perf_counter()
 
+        if table not in ["embeddings", "current_embeddings", "current_run_embeddings"]:
+            raise ValueError(f"Invalid table: '{table}'")
+
+        # ensure table exists
+        try:
+            self.timdex_dataset.get_sa_table("data", table)
+        except ValueError:
+            logger.warning(
+                f"Table '{table}' not found in DuckDB context.  Embeddings may not yet "
+                "exist or TIMDEXDataset.refresh() may be required."
+            )
+            return
+
         data_query = self._build_query(
             table,
             columns,

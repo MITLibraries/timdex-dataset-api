@@ -10,7 +10,6 @@ import pyarrow.dataset as ds
 import pytest
 
 from tests.utils import generate_sample_embeddings_for_run
-from timdex_dataset_api import TIMDEXDataset
 from timdex_dataset_api.embeddings import (
     METADATA_SELECT_FILTER_COLUMNS,
     TIMDEX_DATASET_EMBEDDINGS_SCHEMA,
@@ -302,9 +301,7 @@ def test_current_embeddings_view_single_run(timdex_dataset_for_embeddings_views)
 
     # write embeddings for run "apple-1"
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="apple-1"))
-
-    # NOTE: at time of test creation, this manual reload is required
-    td = TIMDEXDataset(td.location)
+    td.refresh()
 
     # query current_embeddings for apple source using read_dataframe
     result = td.embeddings.read_dataframe(table="current_embeddings", source="apple")
@@ -320,9 +317,7 @@ def test_current_embeddings_view_multiple_runs(timdex_dataset_for_embeddings_vie
     # write embeddings for runs "orange-1" and "orange-2"
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="orange-1"))
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="orange-2"))
-
-    # NOTE: at time of test creation, this manual reload is required
-    td = TIMDEXDataset(td.location)
+    td.refresh()
 
     # query current_embeddings for orange source using read_dataframe
     result = td.embeddings.read_dataframe(table="current_embeddings", source="orange")
@@ -363,9 +358,7 @@ def test_current_embeddings_view_handles_duplicate_run_embeddings(
             td, run_id="lemon-2", embedding_timestamp="2025-08-03T00:00:00+00:00"
         )
     )
-
-    # NOTE: at time of test creation, this manual reload is required
-    td = TIMDEXDataset(td.location)
+    td.refresh()
 
     # check all embeddings for lemon-2 to verify both writes exist
     all_lemon_2 = td.embeddings.read_dataframe(table="embeddings", run_id="lemon-2")
@@ -416,9 +409,7 @@ def test_embeddings_view_includes_all_embeddings(timdex_dataset_for_embeddings_v
             td, run_id="lemon-2", embedding_timestamp="2025-08-03T00:00:00+00:00"
         )
     )
-
-    # NOTE: at time of test creation, this manual reload is required
-    td = TIMDEXDataset(td.location)
+    td.refresh()
 
     # query all embeddings for lemon source
     result = td.embeddings.read_dataframe(table="embeddings", source="lemon")
@@ -435,3 +426,25 @@ def test_embeddings_view_includes_all_embeddings(timdex_dataset_for_embeddings_v
     lemon_2_embeddings = result[result["run_id"] == "lemon-2"]
     assert len(lemon_2_embeddings) == 10  # 5 from each write
     assert (lemon_2_embeddings["run_date"] == date(2025, 8, 2)).all()
+
+
+def test_embeddings_read_batches_iter_returns_empty_when_embeddings_missing(
+    timdex_dataset_empty, caplog
+):
+    result = list(timdex_dataset_empty.embeddings.read_batches_iter())
+    assert result == []
+    assert (
+        "Table 'embeddings' not found in DuckDB context.  Embeddings may not yet exist "
+        "or TIMDEXDataset.refresh() may be required." in caplog.text
+    )
+
+
+def test_embeddings_read_batches_iter_returns_empty_for_invalid_table(
+    timdex_embeddings_with_runs, caplog
+):
+    """read_batches_iter returns empty iterator for nonexistent table name."""
+    with pytest.raises(
+        ValueError,
+        match="Invalid table: 'nonexistent'",
+    ):
+        list(timdex_embeddings_with_runs.read_batches_iter(table="nonexistent"))
