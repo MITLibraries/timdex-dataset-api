@@ -1,5 +1,5 @@
 # ruff: noqa: D205, D209, PLR2004
-
+import re
 
 import pandas as pd
 import pyarrow as pa
@@ -280,3 +280,28 @@ def test_read_batches_iter_limit_returns_n_rows(timdex_dataset_multi_source):
     batches = timdex_dataset_multi_source.read_batches_iter(limit=10)
     table = pa.Table.from_batches(batches)
     assert len(table) == 10
+
+
+def test_read_batches_iter_returns_empty_when_metadata_missing(
+    timdex_dataset_empty, caplog
+):
+    with pytest.raises(
+        ValueError,
+        match=re.escape(
+            "Table 'records' not found in DuckDB context.  If this is a new dataset, "
+            "either records do not yet exist or a "
+            "TIMDEXDataset.metadata.rebuild_dataset_metadata() may be required."
+        ),
+    ):
+        list(timdex_dataset_empty.read_batches_iter())
+
+
+def test_read_batches_iter_returns_empty_for_invalid_table(
+    timdex_dataset_multi_source, caplog
+):
+    """read_batches_iter returns empty iterator for nonexistent table name."""
+    with pytest.raises(
+        ValueError,
+        match="Invalid table: 'nonexistent'",
+    ):
+        list(timdex_dataset_multi_source.read_batches_iter(table="nonexistent"))

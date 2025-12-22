@@ -443,17 +443,30 @@ class TIMDEXDataset:
         """
         start_time = time.perf_counter()
 
+        # ensure valid table
+        if table not in ["records", "current_records"]:
+            raise ValueError(f"Invalid table: '{table}'")
+
+        # ensure table exists
+        try:
+            self.get_sa_table("metadata", table)
+        except ValueError as exc:
+            raise ValueError(
+                f"Table '{table}' not found in DuckDB context.  If this is a new "
+                "dataset, either records do not yet exist or a "
+                "TIMDEXDataset.metadata.rebuild_dataset_metadata() may be required."
+            ) from exc
+
         temp_table_name = "read_meta_chunk"
         total_yield_count = 0
 
-        for i, meta_chunk_df in enumerate(
-            self._iter_meta_chunks(
-                table,
-                limit=limit,
-                where=where,
-                **filters,
-            )
-        ):
+        meta_chunks = self._iter_meta_chunks(
+            table,
+            limit=limit,
+            where=where,
+            **filters,
+        )
+        for i, meta_chunk_df in enumerate(meta_chunks):
             batch_time = time.perf_counter()
             batch_yield_count = len(meta_chunk_df)
             total_yield_count += batch_yield_count
