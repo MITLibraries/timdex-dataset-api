@@ -4,25 +4,22 @@ import os
 import shutil
 import tempfile
 import time
-from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, Unpack, cast
-from urllib.parse import urlparse
 
-import duckdb
 from duckdb import DuckDBPyConnection
 from duckdb_engine import Dialect as DuckDBDialect
-from sqlalchemy import Table, func, literal, select, text, tuple_
+from sqlalchemy import func, literal, select, text, tuple_
 
 from timdex_dataset_api.config import configure_logger
 from timdex_dataset_api.utils import (
+    DuckDBConnectionFactory,
     S3Client,
     build_filter_expr_sa,
-    sa_reflect_duckdb_conn,
 )
 
 if TYPE_CHECKING:
-    from timdex_dataset_api.dataset import DatasetFilters
+    from timdex_dataset_api.dataset import DatasetFilters, TIMDEXDataset
 
 logger = configure_logger(__name__)
 
@@ -39,54 +36,35 @@ ORDERED_METADATA_COLUMN_NAMES = [
 ]
 
 
-@dataclass
-class TIMDEXDatasetMetadataConfig:
-    """Configurations for metadata operations.
-
-    - duckdb_connection_memory_limit: Memory limit for DuckDB connection
-    - duckdb_connection_threads: Thread limit for DuckDB connection
-    """
-
-    duckdb_connection_memory_limit: str = field(
-        default_factory=lambda: os.getenv("TDA_DUCKDB_MEMORY_LIMIT", "4GB")
-    )
-    duckdb_connection_threads: int = field(
-        default_factory=lambda: int(os.getenv("TDA_DUCKDB_THREADS", "8"))
-    )
-
-
 class TIMDEXDatasetMetadata:
 
-    def __init__(
-        self,
-        location: str,
-        *,
-        preload_current_records: bool = False,
-    ) -> None:
+    def __init__(self, timdex_dataset: "TIMDEXDataset") -> None:
         """Init TIMDEXDatasetMetadata.
 
         Args:
-            location: root location of TIMDEX dataset, e.g. 's3://timdex/dataset'
-            preload_current_records: if True, create in-memory temp table for
-                current_records (faster for repeated queries); if False, create view only
-                (default, lower memory)
+            timdex_dataset: parent TIMDEXDataset instance
         """
-        self.location = location
-        self.config = TIMDEXDatasetMetadataConfig()
-        self.preload_current_records = preload_current_records
+        self.timdex_dataset = timdex_dataset
+        self.conn = timdex_dataset.conn
 
         self.create_metadata_structure()
-        self.conn: DuckDBPyConnection = self.setup_duckdb_context()
-        self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
+        self._setup_metadata_schema()
+
+    @property
+    def location(self) -> str:
+        return self.timdex_dataset.location
 
     @property
     def location_scheme(self) -> Literal["file", "s3"]:
-        scheme = urlparse(self.location).scheme
-        if scheme == "":
-            return "file"
-        if scheme == "s3":
-            return "s3"
-        raise ValueError(f"Location with scheme type '{scheme}' not supported.")
+        return self.timdex_dataset.location_scheme
+
+    @property
+    def config(self) -> "TIMDEXDataset.config":  # type: ignore[name-defined]
+        return self.timdex_dataset.config
+
+    @property
+    def preload_current_records(self) -> bool:
+        return self.timdex_dataset.preload_current_records
 
     @property
     def metadata_root(self) -> str:
@@ -138,7 +116,7 @@ class TIMDEXDatasetMetadata:
         ]  # type: ignore[index]
 
     def create_metadata_structure(self) -> None:
-        """Ensure metadata structure exists in TIDMEX dataset.."""
+        """Ensure metadata structure exists in TIMDEX dataset."""
         if self.location_scheme == "file":
             Path(self.metadata_database_path).parent.mkdir(
                 parents=True,
@@ -149,111 +127,12 @@ class TIMDEXDatasetMetadata:
                 exist_ok=True,
             )
 
-    def configure_duckdb_connection(self, conn: DuckDBPyConnection) -> None:
-        """Configure a DuckDB connection/context.
-
-        These configurations include things like memory settings, AWS authentication, etc.
-        """
-        self._install_duckdb_extensions(conn)
-        self._configure_duckdb_s3_secret(conn)
-        self._configure_duckdb_memory_profile(conn)
-
-    def _install_duckdb_extensions(self, conn: DuckDBPyConnection) -> None:
-        """Ensure DuckDB capable of installing extensions and install any required."""
-        # ensure secrets and extensions paths are accessible
-        home_env = os.getenv("HOME")
-        use_fallback_home = not home_env or not Path(home_env).is_dir()
-
-        if use_fallback_home:
-            duckdb_home = Path("/tmp/.duckdb")  # noqa: S108
-            secrets_dir = duckdb_home / "secrets"
-            extensions_dir = duckdb_home / "extensions"
-
-            secrets_dir.mkdir(parents=True, exist_ok=True)
-            extensions_dir.mkdir(parents=True, exist_ok=True)
-
-            conn.execute(f"set secret_directory='{secrets_dir.as_posix()}';")
-            conn.execute(f"set extension_directory='{extensions_dir.as_posix()}';")
-
-        # install HTTPFS extension
-        conn.execute(
-            """
-            install httpfs;
-            load httpfs;
-            """
-        )
-
-    def _configure_duckdb_s3_secret(
-        self,
-        conn: DuckDBPyConnection,
-        scope: str | None = None,
-    ) -> None:
-        """Configure a secret in a DuckDB connection for S3 access.
-
-        If a scope is provided, e.g. an S3 URI prefix like 's3://timdex', set a scope
-        parameter in the config.  Else, leave it blank.
-        """
-        # establish scope string
-        scope_str = f", scope '{scope}'" if scope else ""
-
-        if os.getenv("MINIO_S3_ENDPOINT_URL"):
-            conn.execute(
-                f"""
-                create or replace secret minio_s3_secret (
-                    type s3,
-                    endpoint '{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}',
-                    key_id '{os.environ["MINIO_USERNAME"]}',
-                    secret '{os.environ["MINIO_PASSWORD"]}',
-                    region 'us-east-1',
-                    url_style 'path',
-                    use_ssl false
-                    {scope_str}
-                );
-                """
-            )
-
-        elif self.location_scheme == "s3":
-            conn.execute(
-                f"""
-                create or replace secret aws_s3_secret (
-                    type s3,
-                    provider credential_chain,
-                    refresh true
-                    {scope_str}
-                );
-                """
-            )
-
-    def _configure_duckdb_memory_profile(self, conn: DuckDBPyConnection) -> None:
-        conn.execute(
-            f"""
-            set enable_external_file_cache = false;
-            set memory_limit = '{self.config.duckdb_connection_memory_limit}';
-            set threads = {self.config.duckdb_connection_threads};
-            set preserve_insertion_order=false;
-            """
-        )
-
     def database_exists(self) -> bool:
         """Check if static metadata database file exists."""
         if self.location_scheme == "s3":
             s3_client = S3Client()
             return s3_client.object_exists(self.metadata_database_path)
         return os.path.exists(self.metadata_database_path)
-
-    def get_sa_table(self, table: str) -> Table:
-        """Get SQLAlchemy Table from reflected SQLAlchemy metadata."""
-        schema_table = f"metadata.{table}"
-        if schema_table not in self._sa_metadata.tables:
-            raise ValueError(
-                f"Could not find table '{table}' in DuckDB schema 'metadata'."
-            )
-        return self._sa_metadata.tables[schema_table]
-
-    def refresh(self) -> None:
-        """Refresh DuckDB connection and reflected SQLAlchemy metadata on self."""
-        self.conn = self.setup_duckdb_context()
-        self._sa_metadata = sa_reflect_duckdb_conn(self.conn, schema="metadata")
 
     def rebuild_dataset_metadata(self) -> None:
         """Fully rebuild dataset metadata.
@@ -274,9 +153,8 @@ class TIMDEXDatasetMetadata:
         with tempfile.TemporaryDirectory() as temp_dir:
             local_db_path = str(Path(temp_dir) / self.metadata_database_filename)
 
-            with duckdb.connect(local_db_path) as conn:
-                self.configure_duckdb_connection(conn)
-
+            factory = DuckDBConnectionFactory(location_scheme=self.location_scheme)
+            with factory.create_connection(local_db_path) as conn:
                 self._create_full_dataset_table(conn)
 
             # copy local database file to remote location
@@ -289,8 +167,8 @@ class TIMDEXDatasetMetadata:
             else:
                 shutil.copy(local_db_path, self.metadata_database_path)
 
-        # refresh DuckDB connection
-        self.conn = self.setup_duckdb_context()
+        # refresh dataset to pick up new metadata
+        self.timdex_dataset.refresh()
 
     def _create_full_dataset_table(self, conn: DuckDBPyConnection) -> None:
         """Create a table of metadata for all records in the ETL parquet dataset.
@@ -319,7 +197,7 @@ class TIMDEXDatasetMetadata:
         conn.execute(query)
 
         # reset thread count
-        conn.execute(f"""SET threads = {self.config.duckdb_connection_threads};""")
+        conn.execute(f"""SET threads = {self.timdex_dataset.conn_factory.threads};""")
 
         row_count = conn.query("""select count(*) from records;""").fetchone()[0]  # type: ignore[index]
         logger.info(
@@ -327,45 +205,30 @@ class TIMDEXDatasetMetadata:
             f"elapsed: {time.perf_counter() - start_time}"
         )
 
-    def setup_duckdb_context(self) -> DuckDBPyConnection:
-        """Create a DuckDB connection that provides full dataset metadata information.
+    def _setup_metadata_schema(self) -> None:
+        """Set up metadata schema views in the DuckDB connection.
 
-        The following work is performed:
-            1. Attach to static metadata database file.
-            2. Create views that union static metadata with any append deltas.
-            3. Create additional metadata views as needed.
-
-        The resulting, in-memory DuckDB connection is used for all metadata queries.
-
-        If a static database file is not found, a configured DuckDB connection is still
-        returned.
+        Creates views for accessing static metadata DB and append deltas.
+        If static DB doesn't exist, logs warning but doesn't fail.
         """
         start_time = time.perf_counter()
-
-        conn = duckdb.connect()
-        conn.execute("""SET enable_progress_bar = false;""")
-        self.configure_duckdb_connection(conn)
 
         if not self.database_exists():
             logger.warning(
                 f"Static metadata database not found @ '{self.metadata_database_path}'. "
-                "Please recreate via TIMDEXDatasetMetadata.recreate_database_file()."
+                "Consider rebuild via TIMDEXDataset.metadata.rebuild_dataset_metadata()."
             )
-            return conn
+            return
 
-        # create metadata schema
-        conn.execute("create schema metadata;")
-
-        self._attach_database_file(conn)
-        self._create_append_deltas_view(conn)
-        self._create_records_union_view(conn)
-        self._create_current_records_view(conn)
+        self._attach_database_file(self.conn)
+        self._create_append_deltas_view(self.conn)
+        self._create_records_union_view(self.conn)
+        self._create_current_records_view(self.conn)
 
         logger.debug(
-            "DuckDB context created for TIMDEXDatasetMetadata, "
+            "Metadata schema setup for TIMDEXDatasetMetadata, "
             f"{round(time.perf_counter()-start_time,2)}s"
         )
-        return conn
 
     def _attach_database_file(self, conn: DuckDBPyConnection) -> None:
         """Readonly attach to static metadata database.
@@ -649,7 +512,7 @@ class TIMDEXDatasetMetadata:
         **filters: Unpack["DatasetFilters"],
     ) -> str:
         """Build SQL query using SQLAlchemy against metadata schema tables and views."""
-        sa_table = self.get_sa_table(table)
+        sa_table = self.timdex_dataset.get_sa_table("metadata", table)
 
         # create SQL statement object
         stmt = select(

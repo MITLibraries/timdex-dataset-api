@@ -14,11 +14,10 @@ from attrs import asdict, define, field
 from duckdb import DuckDBPyConnection
 from duckdb import IOException as DuckDBIOException
 from duckdb_engine import Dialect as DuckDBDialect
-from sqlalchemy import Table, and_, select, text
-from sqlalchemy.types import ARRAY, FLOAT
+from sqlalchemy import and_, select, text
 
 from timdex_dataset_api.record import datetime_iso_parse
-from timdex_dataset_api.utils import build_filter_expr_sa, sa_reflect_duckdb_conn
+from timdex_dataset_api.utils import build_filter_expr_sa
 
 if TYPE_CHECKING:
     from timdex_dataset_api import TIMDEXDataset
@@ -148,56 +147,35 @@ class TIMDEXEmbeddings:
             - timdex_dataset: instance of TIMDEXDataset
         """
         self.timdex_dataset = timdex_dataset
+        self.conn = timdex_dataset.conn
 
         self.schema = TIMDEX_DATASET_EMBEDDINGS_SCHEMA
         self.partition_columns = ["year", "month", "day"]
 
-        # DuckDB context
-        self.conn = self.setup_duckdb_context()
-        self._sa_metadata_data_schema = sa_reflect_duckdb_conn(self.conn, schema="data")
-
-        # resolve data type for 'embedding_vector' column
-        if "data.embeddings" in self._sa_metadata_data_schema.tables:
-            sa_metadata_data_embeddings_table = self._sa_metadata_data_schema.tables[
-                "data.embeddings"
-            ]
-            sa_metadata_data_embeddings_table.c.embedding_vector.type = ARRAY(FLOAT)
+        # set up embeddings views
+        self._setup_embeddings_views()
 
     @property
     def data_embeddings_root(self) -> str:
         return f"{self.timdex_dataset.location.removesuffix('/')}/data/embeddings"
 
-    def get_sa_table(self, table: str) -> Table:
-        """Get SQLAlchemy Table from reflected SQLAlchemy metadata."""
-        schema_table = f"data.{table}"
-        if schema_table not in self._sa_metadata_data_schema.tables:
-            raise ValueError(f"Could not find table '{table}' in DuckDB schema 'data'.")
-        return self._sa_metadata_data_schema.tables[schema_table]
-
-    def setup_duckdb_context(self) -> DuckDBPyConnection:
-        """Create a DuckDB connection for embeddings query and retrieval.
-
-        This method extends TIMDEXDatasetMetadata's pre-existing DuckDB connection
-        (via the attached TIMDEXDataset), creating views in the 'data' schema.
-        """
+    def _setup_embeddings_views(self) -> None:
+        """Set up embeddings views in the 'data' schema."""
         start_time = time.perf_counter()
 
-        conn = self.timdex_dataset.conn
-
         try:
-            self._create_embeddings_view(conn)
-            self._create_current_embeddings_view(conn)
-            self._create_current_run_embeddings_view(conn)
+            self._create_embeddings_view(self.conn)
+            self._create_current_embeddings_view(self.conn)
+            self._create_current_run_embeddings_view(self.conn)
         except DuckDBIOException:
-            logger.warning("No embeddings found")
+            logger.debug("No embeddings parquet files found")
         except Exception as exception:  # noqa: BLE001
-            logger.warning(f"An error occurred while creating views: {exception}")
+            logger.warning(f"Error creating embeddings views: {exception}")
 
         logger.debug(
-            "DuckDB context created for TIMDEXEmbeddings, "
+            "Embeddings views setup for TIMDEXEmbeddings, "
             f"{round(time.perf_counter()-start_time,2)}s"
         )
-        return conn
 
     def _create_embeddings_view(self, conn: DuckDBPyConnection) -> None:
         """Create a view that projects over embeddings parquet files."""
@@ -408,8 +386,8 @@ class TIMDEXEmbeddings:
         fetch results. Always joins to metadata.records to enable filtering
         by metadata columns (source, run_date, run_type, action, run_timestamp).
         """
-        embeddings_table = self.get_sa_table(table)
-        metadata_table = self.timdex_dataset.metadata.get_sa_table("records")
+        embeddings_table = self.timdex_dataset.get_sa_table("data", table)
+        metadata_table = self.timdex_dataset.get_sa_table("metadata", "records")
 
         # select specific columns or default to all from embeddings + metadata
         if columns:
