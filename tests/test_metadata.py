@@ -55,17 +55,12 @@ def test_tdm_init_metadata_file_found_success(timdex_metadata):
 
 
 def test_tdm_duckdb_context_creates_metadata_schema(timdex_metadata):
-    assert (
-        timdex_metadata.conn.query(
-            """
+    assert timdex_metadata.conn.query("""
             select count(*)
             from information_schema.schemata
             where catalog_name = 'memory'
             and schema_name = 'metadata';
-            """
-        ).fetchone()[0]
-        == 1
-    )
+            """).fetchone()[0] == 1
 
 
 def test_tdm_connection_has_static_database_attached(timdex_metadata):
@@ -241,38 +236,32 @@ def test_tdm_current_records_with_deltas_logic(timdex_metadata_with_deltas):
 
 def test_tdm_current_records_most_recent_version(timdex_metadata_with_deltas):
     # check that for records with multiple versions, only the most recent is returned
-    multi_version_records = timdex_metadata_with_deltas.conn.query(
-        """
+    multi_version_records = timdex_metadata_with_deltas.conn.query("""
         select timdex_record_id, count(*) as version_count
         from metadata.records
         group by timdex_record_id
         having count(*) > 1
         limit 1;
-        """
-    ).to_df()
+        """).to_df()
 
     if len(multi_version_records) > 0:
         record_id = multi_version_records.iloc[0]["timdex_record_id"]
 
         # get most recent timestamp for this record
-        most_recent = timdex_metadata_with_deltas.conn.query(
-            f"""
+        most_recent = timdex_metadata_with_deltas.conn.query(f"""
             select run_timestamp, run_id
             from metadata.records
             where timdex_record_id = '{record_id}'
             order by run_timestamp desc
             limit 1;
-            """
-        ).to_df()
+            """).to_df()
 
         # verify current_records contains this version
-        current_version = timdex_metadata_with_deltas.conn.query(
-            f"""
+        current_version = timdex_metadata_with_deltas.conn.query(f"""
             select run_timestamp, run_id
             from metadata.current_records
             where timdex_record_id = '{record_id}';
-            """
-        ).to_df()
+            """).to_df()
 
         assert len(current_version) == 1
         assert (
@@ -294,21 +283,17 @@ def test_tdm_merge_append_deltas_static_counts_match_records_count_before_merge(
 def test_tdm_merge_append_deltas_adds_records_to_static_db(
     timdex_metadata_with_deltas, timdex_metadata_merged_deltas
 ):
-    append_deltas = timdex_metadata_with_deltas.conn.query(
-        f"""
+    append_deltas = timdex_metadata_with_deltas.conn.query(f"""
             select
             {','.join(ORDERED_METADATA_COLUMN_NAMES)}
             from metadata.append_deltas
-        """
-    ).to_df()
+        """).to_df()
 
-    merged_static_db = timdex_metadata_merged_deltas.conn.query(
-        f"""
+    merged_static_db = timdex_metadata_merged_deltas.conn.query(f"""
             select
             {','.join(ORDERED_METADATA_COLUMN_NAMES)}
             from static_db.records
-        """
-    ).to_df()
+        """).to_df()
 
     assert set(map(tuple, append_deltas.to_numpy())).issubset(
         set(map(tuple, merged_static_db.to_numpy()))
@@ -332,18 +317,12 @@ def test_td_prepare_duckdb_secret_and_extensions_home_env_var_set_and_valid(
     monkeypatch.setenv("HOME", str(preset_home))
 
     td = TIMDEXDataset(timdex_dataset_with_runs.location)
-    df = (
-        td.conn.query(
-            """
+    df = td.conn.query("""
         select
             current_setting('secret_directory') as secret_directory,
             current_setting('extension_directory') as extension_directory
         ;
-        """
-        )
-        .to_df()
-        .iloc[0]
-    )
+        """).to_df().iloc[0]
     assert "my-account" in df.secret_directory
     assert df.extension_directory == ""  # expected and okay when HOME set
 
@@ -355,18 +334,12 @@ def test_td_prepare_duckdb_secret_and_extensions_home_env_var_unset(
 
     td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
-    df = (
-        td.conn.query(
-            """
+    df = td.conn.query("""
         select
             current_setting('secret_directory') as secret_directory,
             current_setting('extension_directory') as extension_directory
         ;
-        """
-        )
-        .to_df()
-        .iloc[0]
-    )
+        """).to_df().iloc[0]
     assert df.secret_directory == "/tmp/.duckdb/secrets"
     assert df.extension_directory == "/tmp/.duckdb/extensions"
 
@@ -378,18 +351,12 @@ def test_td_prepare_duckdb_secret_and_extensions_home_env_var_set_but_empty(
 
     td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
-    df = (
-        td.conn.query(
-            """
+    df = td.conn.query("""
         select
             current_setting('secret_directory') as secret_directory,
             current_setting('extension_directory') as extension_directory
         ;
-        """
-        )
-        .to_df()
-        .iloc[0]
-    )
+        """).to_df().iloc[0]
     assert df.secret_directory == "/tmp/.duckdb/secrets"
     assert df.extension_directory == "/tmp/.duckdb/extensions"
 
@@ -411,16 +378,14 @@ def test_tdm_preload_false_no_temp_table(timdex_dataset_with_runs):
     td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
     # assert that materialized, temporary table "temp.current_records" does not exist
-    temp_table_count = td.metadata.conn.query(
-        """
+    temp_table_count = td.metadata.conn.query("""
         select count(*)
         from information_schema.tables
         where table_catalog = 'temp'
         and table_name = 'current_records'
         and table_type = 'LOCAL TEMPORARY'
         ;
-        """
-    ).fetchone()[0]
+        """).fetchone()[0]
 
     assert temp_table_count == 0
 
@@ -430,15 +395,13 @@ def test_tdm_preload_true_has_temp_table(timdex_dataset_with_runs):
     td = TIMDEXDataset(timdex_dataset_with_runs.location, preload_current_records=True)
 
     # assert that materialized, temporary table "temp.current_records" does exist
-    temp_table_count = td.metadata.conn.query(
-        """
+    temp_table_count = td.metadata.conn.query("""
             select count(*)
             from information_schema.tables
             where table_catalog = 'temp'
             and table_name = 'current_records'
             and table_type = 'LOCAL TEMPORARY'
             ;
-            """
-    ).fetchone()[0]
+            """).fetchone()[0]
 
     assert temp_table_count == 1

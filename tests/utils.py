@@ -105,14 +105,12 @@ def generate_sample_embeddings_for_run(
     embedding_dimensions: int = 3,
 ) -> Iterator[DatasetEmbedding]:
     """Generate sample DatasetEmbeddings for a given ETL run."""
-    records_metadata = timdex_dataset.conn.query(
-        f"""
+    records_metadata = timdex_dataset.conn.query(f"""
     select
         *
     from metadata.records
     where run_id = '{run_id}';
-    """
-    ).to_df()
+    """).to_df()
 
     if not embedding_timestamp:
         embedding_timestamp = records_metadata.iloc[0].run_timestamp.isoformat()
