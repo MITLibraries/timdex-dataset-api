@@ -181,8 +181,7 @@ class TIMDEXEmbeddings:
         """Create a view that projects over embeddings parquet files."""
         logger.debug("creating view data.embeddings")
 
-        conn.execute(
-            f"""
+        conn.execute(f"""
             create or replace view data.embeddings as
             (
                 select *
@@ -192,8 +191,7 @@ class TIMDEXEmbeddings:
                     filename=true
                 )
             );
-            """
-        )
+            """)
 
     def _create_current_embeddings_view(self, conn: DuckDBPyConnection) -> None:
         """Create a view of current embedding records.
@@ -205,8 +203,7 @@ class TIMDEXEmbeddings:
         logger.debug("creating view data.current_embeddings")
 
         # SQL for the current records logic (CTEs)
-        conn.execute(
-            """
+        conn.execute("""
             create or replace view data.current_embeddings as
             (
                 with
@@ -229,8 +226,7 @@ class TIMDEXEmbeddings:
                 from ce_ranked_embeddings
                 where rn = 1
             );
-            """
-        )
+            """)
 
     def _create_current_run_embeddings_view(self, conn: DuckDBPyConnection) -> None:
         """Create a view of current embedding records per run.
@@ -242,8 +238,7 @@ class TIMDEXEmbeddings:
         logger.debug("creating view data.current_run_embeddings")
 
         # SQL for the current records logic (CTEs)
-        conn.execute(
-            """
+        conn.execute("""
             create or replace view data.current_run_embeddings as
             (
                 with
@@ -267,8 +262,7 @@ class TIMDEXEmbeddings:
                 from ce_ranked_embeddings
                 where rn = 1
             );
-            """
-        )
+            """)
 
     def write(
         self,

@@ -85,35 +85,23 @@ class TIMDEXDatasetMetadata:
     @property
     def records_count(self) -> int:
         """Count of all records in dataset."""
-        return self.conn.query(
-            """
+        return self.conn.query("""
             select count(*) from metadata.records;
-            """
-        ).fetchone()[
-            0
-        ]  # type: ignore[index]
+            """).fetchone()[0]  # type: ignore[index]
 
     @property
     def current_records_count(self) -> int:
         """Count of all current records in dataset."""
-        return self.conn.query(
-            """
+        return self.conn.query("""
             select count(*) from metadata.current_records;
-            """
-        ).fetchone()[
-            0
-        ]  # type: ignore[index]
+            """).fetchone()[0]  # type: ignore[index]
 
     @property
     def append_deltas_count(self) -> int:
         """Count of all append deltas."""
-        return self.conn.query(
-            """
+        return self.conn.query("""
             select count(*) from metadata.append_deltas;
-            """
-        ).fetchone()[
-            0
-        ]  # type: ignore[index]
+            """).fetchone()[0]  # type: ignore[index]
 
     def create_metadata_structure(self) -> None:
         """Ensure metadata structure exists in TIMDEX dataset."""
@@ -254,14 +242,10 @@ class TIMDEXDatasetMetadata:
         logger.debug("creating view metadata.append_deltas")
 
         # get current append delta count
-        append_delta_count = conn.execute(
-            f"""
+        append_delta_count = conn.execute(f"""
             select count(*) as file_count
             from glob('{self.append_deltas_path}/*.parquet')
-            """
-        ).fetchone()[
-            0
-        ]  # type: ignore[index]
+            """).fetchone()[0]  # type: ignore[index]
         logger.debug(f"{append_delta_count} append deltas found")
 
         # if deltas, create view projecting over those parquet files
@@ -290,8 +274,7 @@ class TIMDEXDatasetMetadata:
     def _create_records_union_view(self, conn: DuckDBPyConnection) -> None:
         logger.debug("creating view metadata.records")
 
-        conn.execute(
-            f"""
+        conn.execute(f"""
             create or replace view metadata.records as
             (
                 select
@@ -302,8 +285,7 @@ class TIMDEXDatasetMetadata:
                     {','.join(ORDERED_METADATA_COLUMN_NAMES)}
                 from metadata.append_deltas
             );
-            """
-        )
+            """)
 
     def _create_current_records_view(self, conn: DuckDBPyConnection) -> None:
         """Create a view of current records.
@@ -373,25 +355,21 @@ class TIMDEXDatasetMetadata:
         if self.preload_current_records:
             logger.debug("creating temp table temp.main.current_records")
             conn.execute("set temp_directory = '/tmp';")
-            conn.execute(
-                f"""
+            conn.execute(f"""
                 create or replace temp table temp.main.current_records as
                 {current_records_query};
 
                 -- create view in metadata schema that points to temp table
                 create or replace view metadata.current_records as
                 select * from temp.main.current_records;
-                """
-            )
+                """)
 
         # create view only (lazy evaluation)
         else:
-            conn.execute(
-                f"""
+            conn.execute(f"""
                 create or replace view metadata.current_records as
                 {current_records_query};
-                """
-            )
+                """)
 
     def merge_append_deltas(self) -> None:
         """Merge append deltas into the static metadata database file."""
@@ -402,16 +380,10 @@ class TIMDEXDatasetMetadata:
         s3_client = S3Client()
 
         # get filenames of append deltas
-        append_delta_filenames = (
-            self.conn.query(
-                """
+        append_delta_filenames = self.conn.query("""
                 select distinct(append_delta_filename)
                 from metadata.append_deltas
-                """
-            )
-            .to_df()["append_delta_filename"]
-            .to_list()
-        )
+                """).to_df()["append_delta_filename"].to_list()
 
         if len(append_delta_filenames) == 0:
             logger.info("no append deltas found")
@@ -433,14 +405,12 @@ class TIMDEXDatasetMetadata:
             self.conn.execute(f"""attach '{local_db_path}' AS local_static_db;""")
 
             # insert records from append deltas to local static db
-            self.conn.execute(
-                f"""
+            self.conn.execute(f"""
                 insert into local_static_db.records
                 select
                     {','.join(ORDERED_METADATA_COLUMN_NAMES)}
                 from metadata.append_deltas
-                """
-            )
+                """)
 
             # detach from local static db
             self.conn.execute("""detach local_static_db;""")

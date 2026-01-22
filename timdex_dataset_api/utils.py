@@ -164,18 +164,15 @@ class DuckDBConnectionFactory:
             conn.execute(f"set secret_directory='{secrets_dir.as_posix()}';")
             conn.execute(f"set extension_directory='{extensions_dir.as_posix()}';")
 
-        conn.execute(
-            """
+        conn.execute("""
             install httpfs;
             load httpfs;
-            """
-        )
+            """)
 
     def _configure_s3_secret(self, conn: DuckDBPyConnection) -> None:
         """Configure a secret in a DuckDB connection for S3 access."""
         if os.getenv("MINIO_S3_ENDPOINT_URL"):
-            conn.execute(
-                f"""
+            conn.execute(f"""
                 create or replace secret minio_s3_secret (
                     type s3,
                     endpoint '{urlparse(os.environ["MINIO_S3_ENDPOINT_URL"]).netloc}',
@@ -185,30 +182,25 @@ class DuckDBConnectionFactory:
                     url_style 'path',
                     use_ssl false
                 );
-                """
-            )
+                """)
 
         elif self.location_scheme == "s3":
-            conn.execute(
-                """
+            conn.execute("""
                 create or replace secret aws_s3_secret (
                     type s3,
                     provider credential_chain,
                     refresh true
                 );
-                """
-            )
+                """)
 
     def _configure_memory_profile(self, conn: DuckDBPyConnection) -> None:
         """Configure DuckDB memory and thread settings."""
-        conn.execute(
-            f"""
+        conn.execute(f"""
             set enable_external_file_cache = false;
             set memory_limit = '{self.memory_limit}';
             set threads = {self.threads};
             set preserve_insertion_order=false;
-            """
-        )
+            """)
 
 
 def sa_reflect_duckdb_conn(

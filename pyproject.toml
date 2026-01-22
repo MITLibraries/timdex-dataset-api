@@ -26,7 +26,7 @@ dependencies = [
     "boto3",
     "duckdb",
     "duckdb_engine",
-    "pandas",
+    "pandas<3.0.0",
     "pyarrow",
     "sqlalchemy==2.0.44"
 ]
