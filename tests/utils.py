@@ -118,7 +118,7 @@ def generate_sample_embeddings_for_run(
     for _idx, record in records_metadata.iterrows():
         embedding_vector = [random.random() for _ in range(embedding_dimensions)]
         embedding_object = json.dumps(
-            {f"token{x+1}": (x + 1) / 10 for x in range(embedding_dimensions)}
+            {f"token{x + 1}": (x + 1) / 10 for x in range(embedding_dimensions)}
         ).encode()
 
         yield DatasetEmbedding(

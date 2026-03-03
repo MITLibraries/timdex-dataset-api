@@ -70,7 +70,6 @@ def fix_backfilled_run_timestamps(location: str, *, dry_run: bool = False) -> No
     error_count = 0
 
     for idx, row in parquet_to_run_timestamp_df.iterrows():
-
         if row.status == "OK":
             continue
 
@@ -94,7 +93,7 @@ def fix_backfilled_run_timestamps(location: str, *, dry_run: bool = False) -> No
         logger.info(json.dumps(result))
 
     logger.info(
-        f"Backfill complete. Elapsed: {time.perf_counter()-start_time}, "
+        f"Backfill complete. Elapsed: {time.perf_counter() - start_time}, "
         f"Success: {success_count}, Skipped: {skip_count}, Errors: {error_count}"
     )
 

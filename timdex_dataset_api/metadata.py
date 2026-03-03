@@ -37,7 +37,6 @@ ORDERED_METADATA_COLUMN_NAMES = [
 
 
 class TIMDEXDatasetMetadata:
-
     def __init__(self, timdex_dataset: "TIMDEXDataset") -> None:
         """Init TIMDEXDatasetMetadata.
 
@@ -174,7 +173,7 @@ class TIMDEXDatasetMetadata:
         query = f"""
             create or replace table records as (
                 select
-                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+                    {",".join(ORDERED_METADATA_COLUMN_NAMES)}
                 from read_parquet(
                     '{self.location}/data/records/**/*.parquet',
                      hive_partitioning=true,
@@ -215,7 +214,7 @@ class TIMDEXDatasetMetadata:
 
         logger.debug(
             "Metadata schema setup for TIMDEXDatasetMetadata, "
-            f"{round(time.perf_counter()-start_time,2)}s"
+            f"{round(time.perf_counter() - start_time, 2)}s"
         )
 
     def _attach_database_file(self, conn: DuckDBPyConnection) -> None:
@@ -278,11 +277,11 @@ class TIMDEXDatasetMetadata:
             create or replace view metadata.records as
             (
                 select
-                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+                    {",".join(ORDERED_METADATA_COLUMN_NAMES)}
                 from static_db.records
                 union all
                 select
-                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+                    {",".join(ORDERED_METADATA_COLUMN_NAMES)}
                 from metadata.append_deltas
             );
             """)
@@ -380,10 +379,14 @@ class TIMDEXDatasetMetadata:
         s3_client = S3Client()
 
         # get filenames of append deltas
-        append_delta_filenames = self.conn.query("""
+        append_delta_filenames = (
+            self.conn.query("""
                 select distinct(append_delta_filename)
                 from metadata.append_deltas
-                """).to_df()["append_delta_filename"].to_list()
+                """)
+            .to_df()["append_delta_filename"]
+            .to_list()
+        )
 
         if len(append_delta_filenames) == 0:
             logger.info("no append deltas found")
@@ -408,7 +411,7 @@ class TIMDEXDatasetMetadata:
             self.conn.execute(f"""
                 insert into local_static_db.records
                 select
-                    {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+                    {",".join(ORDERED_METADATA_COLUMN_NAMES)}
                 from metadata.append_deltas
                 """)
 
@@ -433,7 +436,7 @@ class TIMDEXDatasetMetadata:
 
         logger.debug(
             "append deltas merged into the static metadata database file: "
-            f"{self.metadata_database_path}, {time.perf_counter()-start_time}s"
+            f"{self.metadata_database_path}, {time.perf_counter() - start_time}s"
         )
 
     def write_append_delta_duckdb(self, filepath: str) -> None:
@@ -451,13 +454,13 @@ class TIMDEXDatasetMetadata:
 
         # ensure s3:// schema prefix is present
         if self.location_scheme == "s3":
-            filepath = f"s3://{filepath.removeprefix("s3://")}"
+            filepath = f"s3://{filepath.removeprefix('s3://')}"
 
         # perform query + write as one SQL statement
         sql = f"""
         copy (
             select
-                {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+                {",".join(ORDERED_METADATA_COLUMN_NAMES)}
             from read_parquet(
                 '{filepath}',
                 hive_partitioning=true,
@@ -469,7 +472,7 @@ class TIMDEXDatasetMetadata:
         self.conn.execute(sql)
 
         logger.debug(
-            f"Append delta written: {output_path}, {time.perf_counter()-start_time}s"
+            f"Append delta written: {output_path}, {time.perf_counter() - start_time}s"
         )
 
     def build_keyset_paginated_metadata_query(

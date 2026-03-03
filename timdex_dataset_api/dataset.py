@@ -111,7 +111,6 @@ class TIMDEXDatasetConfig:
 
 
 class TIMDEXDataset:
-
     def __init__(
         self,
         location: str,
@@ -211,7 +210,7 @@ class TIMDEXDataset:
 
         logger.info(
             f"Dataset successfully loaded: '{self.data_records_root}', "
-            f"{round(time.perf_counter()-start_time, 2)}s"
+            f"{round(time.perf_counter() - start_time, 2)}s"
         )
 
         return dataset
@@ -496,12 +495,12 @@ class TIMDEXDataset:
 
             batch_rps = int(batch_yield_count / (time.perf_counter() - batch_time))
             logger.debug(
-                f"read_batches_iter batch {i+1}, yielded: {batch_yield_count} "
+                f"read_batches_iter batch {i + 1}, yielded: {batch_yield_count} "
                 f"@ {batch_rps} records/second, total yielded: {total_yield_count}"
             )
 
         logger.debug(
-            f"read_batches_iter() elapsed: {round(time.perf_counter()-start_time, 2)}s"
+            f"read_batches_iter() elapsed: {round(time.perf_counter() - start_time, 2)}s"
         )
 
     def _iter_meta_chunks(
@@ -525,7 +524,6 @@ class TIMDEXDataset:
 
         total_yielded = 0
         while True:
-
             # enforce limit if passed
             if limit is not None:
                 remaining = limit - total_yielded
@@ -586,7 +584,8 @@ class TIMDEXDataset:
         filenames = list(meta_chunk_df["filename"].unique())
         if self.location_scheme == "s3":
             filenames = [
-                f"s3://{f.removeprefix('s3://')}" for f in filenames  # type: ignore[union-attr]
+                f"s3://{f.removeprefix('s3://')}"
+                for f in filenames  # type: ignore[union-attr]
             ]
         parquet_list_sql = "[" + ",".join(f"'{f}'" for f in filenames) + "]"
 

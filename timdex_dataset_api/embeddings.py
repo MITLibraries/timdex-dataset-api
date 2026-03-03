@@ -136,7 +136,6 @@ class DatasetEmbedding:
 
 
 class TIMDEXEmbeddings:
-
     def __init__(self, timdex_dataset: "TIMDEXDataset"):
         """Init TIMDEXEmbeddings.
 
@@ -174,7 +173,7 @@ class TIMDEXEmbeddings:
 
         logger.debug(
             "Embeddings views setup for TIMDEXEmbeddings, "
-            f"{round(time.perf_counter()-start_time,2)}s"
+            f"{round(time.perf_counter() - start_time, 2)}s"
         )
 
     def _create_embeddings_view(self, conn: DuckDBPyConnection) -> None:
@@ -377,7 +376,7 @@ class TIMDEXEmbeddings:
             rows_per_batch=self.timdex_dataset.config.read_batch_size
         )
 
-        logger.debug(f"read() elapsed: {round(time.perf_counter()-start_time, 2)}s")
+        logger.debug(f"read() elapsed: {round(time.perf_counter() - start_time, 2)}s")
 
     def _build_query(
         self,
