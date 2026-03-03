@@ -13,7 +13,7 @@ help: # Preview Makefile commands
 
 install: # Install Python dependencies
 	pipenv install --dev
-	pipenv run pre-commit install
+	pre-commit install --hook-type pre-push --hook-type pre-commit
 
 update: install # Update Python dependencies
 	pipenv clean
@@ -31,31 +31,20 @@ coveralls: test # Write coverage data to an LCOV report
 	pipenv run coverage lcov -o ./coverage/lcov.info
 
 ####################################
-# Code quality and safety commands
+# Code linting and formatting
 ####################################
 
-lint: black mypy ruff safety # Run linters
-
-black: # Run 'black' linter and print a preview of suggested changes
-	pipenv run black --check --diff .
-
-mypy: # Run 'mypy' linter
+lint:
+	pipenv run ruff format --diff
 	pipenv run mypy .
-
-ruff: # Run 'ruff' linter and print a preview of errors
 	pipenv run ruff check .
 
-safety: # Check for security vulnerabilities and verify Pipfile.lock is up-to-date
-	pipenv run pip-audit
-	pipenv verify
-
-lint-apply: black-apply ruff-apply # Apply changes with 'black' and resolve 'fixable errors' with 'ruff'
-
-black-apply: # Apply changes with 'black'
-	pipenv run black .
-
-ruff-apply: # Resolve 'fixable errors' with 'ruff'
+lint-fix:
+	pipenv run ruff format .
 	pipenv run ruff check --fix .
+
+security:
+	pipenv run pip-audit
 
 
 ######################
