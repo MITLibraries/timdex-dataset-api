@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "timdex_dataset_api"
-dynamic = ["version"]
+version = "4.0.0"
 description = "Python library for interacting with a TIMDEX parquet dataset"
 readme = "README.md"
 requires-python = ">=3.12"
@@ -28,30 +28,28 @@ dependencies = [
     "duckdb_engine",
     "pandas<3.0.0",
     "pyarrow",
-    "sqlalchemy==2.0.44"
+    "sqlalchemy==2.0.44",
 ]
 
-[project.optional-dependencies]
+[dependency-groups]
 dev = [
-    "black",
-    'boto3-stubs[s3]',
-    "coveralls",
-    "ipython",
-    "mypy",
-    "pre-commit",
-    "pyarrow-stubs",
-    "pytest",
-    "ruff",
-    "setuptools",
+    "boto3-stubs[s3]",
+    "coveralls>=4.0.1",
+    "ipython>=8.0.0",
+    "moto>=5.0.0",
+    "mypy>=1.15.0",
     "pandas-stubs",
+    "pip-audit>=2.9.0",
+    "pre-commit>=4.0.0",
+    "pyarrow-stubs",
+    "pytest>=8.0.0",
+    "pytest-mock>=3.0.0",
+    "ruff>=0.9.0",
 ]
 
 [tool.setuptools.packages.find]
 where = ["."]
 exclude = ["tests*"]
-
-[tool.black]
-line-length = 90
 
 [tool.mypy]
 disallow_untyped_calls = true
@@ -70,8 +68,6 @@ filterwarnings = [
 
 [tool.ruff]
 target-version = "py312"
-
-# set max line length
 line-length = 90
 
 # enumerate all fixed violations
@@ -83,11 +79,11 @@ ignore = [
     "COM812",
     "D107",
     "EM101",
-    "N812", 
-    "PTH", 
+    "N812",
+    "PTH",
     "C90",
     "D100",
-    "D101", 
+    "D101",
     "D102",
     "D103",
     "D104",
@@ -95,14 +91,15 @@ ignore = [
     "D417",
     "EM102",
     "G004",
+    "PLC0207",
     "PLR0912",
-    "PLR0913", 
+    "PLR0913",
     "PLR0915",
     "S321",
     "S608",
     "TD002",
     "TD003",
-    "TRY003"
+    "TRY003",
 ]
 
 fixable = ["E", "F", "I", "Q"]
@@ -125,6 +122,3 @@ max-doc-length = 90
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
-
-[tool.setuptools.dynamic]
-version = {attr = "timdex_dataset_api.__version__"}

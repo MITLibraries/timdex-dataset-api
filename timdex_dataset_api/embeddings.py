@@ -136,7 +136,6 @@ class DatasetEmbedding:
 
 
 class TIMDEXEmbeddings:
-
     def __init__(self, timdex_dataset: "TIMDEXDataset"):
         """Init TIMDEXEmbeddings.
 
@@ -174,7 +173,7 @@ class TIMDEXEmbeddings:
 
         logger.debug(
             "Embeddings views setup for TIMDEXEmbeddings, "
-            f"{round(time.perf_counter()-start_time,2)}s"
+            f"{round(time.perf_counter() - start_time, 2)}s"
         )
 
     def _create_embeddings_view(self, conn: DuckDBPyConnection) -> None:
@@ -288,7 +287,7 @@ class TIMDEXEmbeddings:
             basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
             existing_data_behavior="overwrite_or_ignore",
             filesystem=filesystem,
-            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type]
+            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type] # noqa: PLW0108
             format="parquet",
             max_open_files=500,
             max_rows_per_file=self.timdex_dataset.config.max_rows_per_file,
@@ -377,7 +376,7 @@ class TIMDEXEmbeddings:
             rows_per_batch=self.timdex_dataset.config.read_batch_size
         )
 
-        logger.debug(f"read() elapsed: {round(time.perf_counter()-start_time, 2)}s")
+        logger.debug(f"read() elapsed: {round(time.perf_counter() - start_time, 2)}s")
 
     def _build_query(
         self,

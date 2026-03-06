@@ -138,7 +138,7 @@ class DuckDBConnectionFactory:
         conn.execute("SET enable_progress_bar = false;")
         self.configure_connection(conn)
         logger.debug(
-            f"DuckDB connection created, {round(time.perf_counter()-start_time,2)}s"
+            f"DuckDB connection created, {round(time.perf_counter() - start_time, 2)}s"
         )
         return conn
 

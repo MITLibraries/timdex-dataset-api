@@ -22,17 +22,9 @@ Updating the version number when making changes to the library will prompt appli
 
 This library is designed to be utilized by other projects, and can therefore be added as a dependency directly from the Github repository.
 
-Add via `pipenv`:
+Add via `uv`:
 ```shell
-pipenv add git+https://github.com/MITLibraries/timdex-dataset-api.git
-```
-
-Manually add to `Pipfile`:
-```
-[packages]
-... other dependencies...
-timdex_dataset_api = {git = "https://github.com/MITLibraries/timdex-dataset-api.git"}
-... other dependencies...
+uv add git+https://github.com/MITLibraries/timdex-dataset-api.git
 ```
 
 ## Environment Variables

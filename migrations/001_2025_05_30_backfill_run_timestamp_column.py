@@ -83,7 +83,7 @@ def backfill_dataset(location: str, *, dry_run: bool = False) -> None:
         logger.info(json.dumps(result))
 
     logger.info(
-        f"Backfill complete. Elapsed: {time.perf_counter()-start_time}, "
+        f"Backfill complete. Elapsed: {time.perf_counter() - start_time}, "
         f"Success: {success_count}, Skipped: {skip_count}, Errors: {error_count}"
     )
 
