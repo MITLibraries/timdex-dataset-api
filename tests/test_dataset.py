@@ -248,12 +248,15 @@ def test_dataset_duckdb_context_created_on_init(timdex_dataset):
 
 
 def test_dataset_duckdb_context_creates_data_schema(timdex_dataset):
-    assert timdex_dataset.conn.query("""
+    assert (
+        timdex_dataset.conn.query("""
             select count(*)
             from information_schema.schemata
             where catalog_name = 'memory'
             and schema_name = 'data';
-            """).fetchone()[0] == 1
+            """).fetchone()[0]
+        == 1
+    )
 
 
 def test_dataset_preload_current_records_default_false(timdex_dataset):

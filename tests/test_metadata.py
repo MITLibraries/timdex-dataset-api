@@ -55,12 +55,15 @@ def test_tdm_init_metadata_file_found_success(timdex_metadata):
 
 
 def test_tdm_duckdb_context_creates_metadata_schema(timdex_metadata):
-    assert timdex_metadata.conn.query("""
+    assert (
+        timdex_metadata.conn.query("""
             select count(*)
             from information_schema.schemata
             where catalog_name = 'memory'
             and schema_name = 'metadata';
-            """).fetchone()[0] == 1
+            """).fetchone()[0]
+        == 1
+    )
 
 
 def test_tdm_connection_has_static_database_attached(timdex_metadata):
@@ -285,13 +288,13 @@ def test_tdm_merge_append_deltas_adds_records_to_static_db(
 ):
     append_deltas = timdex_metadata_with_deltas.conn.query(f"""
             select
-            {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+            {",".join(ORDERED_METADATA_COLUMN_NAMES)}
             from metadata.append_deltas
         """).to_df()
 
     merged_static_db = timdex_metadata_merged_deltas.conn.query(f"""
             select
-            {','.join(ORDERED_METADATA_COLUMN_NAMES)}
+            {",".join(ORDERED_METADATA_COLUMN_NAMES)}
             from static_db.records
         """).to_df()
 
@@ -317,12 +320,16 @@ def test_td_prepare_duckdb_secret_and_extensions_home_env_var_set_and_valid(
     monkeypatch.setenv("HOME", str(preset_home))
 
     td = TIMDEXDataset(timdex_dataset_with_runs.location)
-    df = td.conn.query("""
+    df = (
+        td.conn.query("""
         select
             current_setting('secret_directory') as secret_directory,
             current_setting('extension_directory') as extension_directory
         ;
-        """).to_df().iloc[0]
+        """)
+        .to_df()
+        .iloc[0]
+    )
     assert "my-account" in df.secret_directory
     assert df.extension_directory == ""  # expected and okay when HOME set
 
@@ -334,12 +341,16 @@ def test_td_prepare_duckdb_secret_and_extensions_home_env_var_unset(
 
     td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
-    df = td.conn.query("""
+    df = (
+        td.conn.query("""
         select
             current_setting('secret_directory') as secret_directory,
             current_setting('extension_directory') as extension_directory
         ;
-        """).to_df().iloc[0]
+        """)
+        .to_df()
+        .iloc[0]
+    )
     assert df.secret_directory == "/tmp/.duckdb/secrets"
     assert df.extension_directory == "/tmp/.duckdb/extensions"
 
@@ -351,12 +362,16 @@ def test_td_prepare_duckdb_secret_and_extensions_home_env_var_set_but_empty(
 
     td = TIMDEXDataset(timdex_dataset_with_runs.location)
 
-    df = td.conn.query("""
+    df = (
+        td.conn.query("""
         select
             current_setting('secret_directory') as secret_directory,
             current_setting('extension_directory') as extension_directory
         ;
-        """).to_df().iloc[0]
+        """)
+        .to_df()
+        .iloc[0]
+    )
     assert df.secret_directory == "/tmp/.duckdb/secrets"
     assert df.extension_directory == "/tmp/.duckdb/extensions"
 
