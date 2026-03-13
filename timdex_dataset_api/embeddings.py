@@ -372,8 +372,8 @@ class TIMDEXEmbeddings:
             **filters,
         )
         cursor = self.conn.execute(data_query)
-        yield from cursor.fetch_record_batch(
-            rows_per_batch=self.timdex_dataset.config.read_batch_size
+        yield from cursor.to_arrow_reader(
+            batch_size=self.timdex_dataset.config.read_batch_size
         )
 
         logger.debug(f"read() elapsed: {round(time.perf_counter() - start_time, 2)}s")
