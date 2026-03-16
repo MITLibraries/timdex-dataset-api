@@ -622,9 +622,7 @@ class TIMDEXDataset:
             self.conn.execute("""set threads=16;""")
         try:
             cursor = self.conn.execute(data_query)
-            yield from cursor.fetch_record_batch(
-                rows_per_batch=self.config.read_batch_size
-            )
+            yield from cursor.to_arrow_reader(batch_size=self.config.read_batch_size)
         finally:
             if self.location_scheme == "s3":
                 self.conn.execute(f"""set threads={self.conn_factory.threads};""")

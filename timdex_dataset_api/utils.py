@@ -161,6 +161,7 @@ class DuckDBConnectionFactory:
             secrets_dir.mkdir(parents=True, exist_ok=True)
             extensions_dir.mkdir(parents=True, exist_ok=True)
 
+            conn.execute(f"set home_directory='{duckdb_home.as_posix()}';")
             conn.execute(f"set secret_directory='{secrets_dir.as_posix()}';")
             conn.execute(f"set extension_directory='{extensions_dir.as_posix()}';")
 
