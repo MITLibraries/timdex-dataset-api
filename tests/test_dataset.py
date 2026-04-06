@@ -1,9 +1,8 @@
-# ruff: noqa: D205, D209, SLF001, PLR2004
+# ruff: noqa: SLF001, PLR2004
 
 import glob
 import os
 from datetime import date
-from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import pyarrow as pa
@@ -17,9 +16,11 @@ from timdex_dataset_api.dataset import (
 )
 
 
-def test_dataset_init_success(tmp_path):
+def test_dataset_parse_location_local_uses_local_filesystem(tmp_path):
     timdex_dataset = TIMDEXDataset(str(tmp_path / "path/to/dataset"))
-    assert isinstance(timdex_dataset.dataset.filesystem, fs.LocalFileSystem)
+    filesystem, path = timdex_dataset.parse_location(timdex_dataset.records.data_root)
+    assert isinstance(filesystem, fs.LocalFileSystem)
+    assert path.endswith("/data/records")
 
 
 def test_dataset_init_env_vars_set_config(monkeypatch, tmp_path):
@@ -42,116 +43,27 @@ def test_dataset_init_custom_config_object(monkeypatch, tmp_path):
     assert timdex_dataset.config.max_rows_per_file == 42
 
 
-@patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
-@patch("timdex_dataset_api.dataset.ds.dataset")
-def test_load_pyarrow_dataset_default_uses_data_records_root(
-    mock_pyarrow_ds, mock_local_fs, tmp_path
-):
-    """Ensure load_pyarrow_dataset() without args calls pyarrow.dataset with the
-    dataset's data_records_root path as the source and the proper filesystem."""
-    mock_local_fs.return_value = MagicMock()
-    mock_pyarrow_ds.return_value = MagicMock()
-
-    location = str(Path(tmp_path) / "local/path/to/default_dataset")
-
-    timdex_dataset = TIMDEXDataset(location=location)
-    # call the explicit loader to exercise the code path
-    dataset_obj = timdex_dataset.load_pyarrow_dataset()
-
-    mock_pyarrow_ds.assert_called_with(
-        f"{location}/data/records",
-        schema=timdex_dataset.schema,
-        format="parquet",
-        partitioning="hive",
-        filesystem=mock_local_fs.return_value,
-    )
-    assert dataset_obj == mock_pyarrow_ds.return_value
-    assert timdex_dataset.dataset == mock_pyarrow_ds.return_value
-
-
-@patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
-@patch("timdex_dataset_api.dataset.ds.dataset")
-def test_load_pyarrow_dataset_with_parquet_files_list(
-    mock_pyarrow_ds, mock_local_fs, tmp_path
-):
-    """Ensure load_pyarrow_dataset(parquet_files=...) passes the explicit list
-    of parquet files as the source to pyarrow.dataset."""
-    mock_local_fs.return_value = MagicMock()
-    mock_pyarrow_ds.return_value = MagicMock()
-
-    location = str(Path(tmp_path) / "local/path/to/dataset_with_files")
-
-    timdex_dataset = TIMDEXDataset(location=location)
-
-    parquet_files = [
-        f"{timdex_dataset.data_records_root}/source=alma/run_date=2024-12-01/part-0.parquet",
-        f"{timdex_dataset.data_records_root}/source=alma/run_date=2024-12-01/part-1.parquet",
-    ]
-
-    dataset_obj = timdex_dataset.load_pyarrow_dataset(parquet_files=parquet_files)
-
-    mock_pyarrow_ds.assert_called_with(
-        parquet_files,
-        schema=timdex_dataset.schema,
-        format="parquet",
-        partitioning="hive",
-        filesystem=mock_local_fs.return_value,
-    )
-    assert dataset_obj == mock_pyarrow_ds.return_value
-    assert timdex_dataset.dataset == mock_pyarrow_ds.return_value
-
-
-@patch("timdex_dataset_api.dataset.fs.LocalFileSystem")
-@patch("timdex_dataset_api.dataset.ds.dataset")
-def test_dataset_load_local_sets_filesystem_and_dataset_success(
-    mock_pyarrow_ds, mock_local_fs, tmp_path
-):
-    mock_local_fs.return_value = MagicMock()
-    mock_pyarrow_ds.return_value = MagicMock()
-
-    location = str(Path(tmp_path) / "local/path/to/dataset")
-
-    timdex_dataset = TIMDEXDataset(location=location)
-
-    mock_pyarrow_ds.assert_called_once_with(
-        f"{location}/data/records",
-        schema=timdex_dataset.schema,
-        format="parquet",
-        partitioning="hive",
-        filesystem=mock_local_fs.return_value,
-    )
-
-    assert timdex_dataset.dataset == mock_pyarrow_ds.return_value
-
-
 @patch("timdex_dataset_api.dataset.TIMDEXDataset.get_s3_filesystem")
-@patch("timdex_dataset_api.dataset.ds.dataset")
-def test_dataset_load_s3_sets_filesystem_and_dataset_success(
-    mock_pyarrow_ds, mock_get_s3_fs, s3_bucket_mocked
+def test_dataset_parse_location_s3_sets_filesystem_and_path(
+    mock_get_s3_fs, s3_bucket_mocked
 ):
     mock_get_s3_fs.return_value = MagicMock()
-    mock_pyarrow_ds.return_value = MagicMock()
 
     timdex_dataset = TIMDEXDataset(location="s3://timdex/path/to/dataset")
+    filesystem, path = timdex_dataset.parse_location(timdex_dataset.records.data_root)
 
-    mock_pyarrow_ds.assert_called_with(
-        "timdex/path/to/dataset/data/records",
-        schema=timdex_dataset.schema,
-        format="parquet",
-        partitioning="hive",
-        filesystem=mock_get_s3_fs.return_value,
-    )
-    assert timdex_dataset.dataset == mock_pyarrow_ds.return_value
+    assert filesystem == mock_get_s3_fs.return_value
+    assert path == "timdex/path/to/dataset/data/records"
 
 
 def test_filters_single_nonpartition_success(timdex_dataset_multi_source):
-    df = timdex_dataset_multi_source.read_dataframe(run_id="abc123")
+    df = timdex_dataset_multi_source.records.read_dataframe(run_id="abc123")
     assert df is not None
     assert set(df["run_id"].unique().tolist()) == {"abc123"}
 
 
 def test_filters_multi_nonpartition_success(timdex_dataset_multi_source):
-    df = timdex_dataset_multi_source.read_dataframe(
+    df = timdex_dataset_multi_source.records.read_dataframe(
         timdex_record_id="alma:0",
         source="alma",
         run_type="daily",
@@ -164,30 +76,36 @@ def test_filters_multi_nonpartition_success(timdex_dataset_multi_source):
 
 
 def test_filters_or_nonpartition_success(timdex_dataset_multi_source):
-    df = timdex_dataset_multi_source.read_dataframe(timdex_record_id=["alma:0", "alma:1"])
+    df = timdex_dataset_multi_source.records.read_dataframe(
+        timdex_record_id=["alma:0", "alma:1"]
+    )
     assert df is not None
     assert set(df["timdex_record_id"].tolist()) == {"alma:0", "alma:1"}
 
 
 def test_filters_run_date_str_success(timdex_dataset_multi_source):
-    df = timdex_dataset_multi_source.read_dataframe(run_date="2024-12-01")
+    df = timdex_dataset_multi_source.records.read_dataframe(run_date="2024-12-01")
     assert df is not None
-    df_empty = timdex_dataset_multi_source.read_dataframe(run_date="2024-12-02")
+    df_empty = timdex_dataset_multi_source.records.read_dataframe(run_date="2024-12-02")
     assert df_empty is None or len(df_empty) == 0
 
 
 def test_filters_run_date_obj_success(timdex_dataset_multi_source):
-    df = timdex_dataset_multi_source.read_dataframe(run_date=date(2024, 12, 1))
+    df = timdex_dataset_multi_source.records.read_dataframe(run_date=date(2024, 12, 1))
     assert df is not None
-    df_empty = timdex_dataset_multi_source.read_dataframe(run_date=date(2024, 12, 2))
+    df_empty = timdex_dataset_multi_source.records.read_dataframe(
+        run_date=date(2024, 12, 2)
+    )
     assert df_empty is None or len(df_empty) == 0
 
 
 def test_filters_ymd_success(timdex_dataset_multi_source):
     # metadata filters do not expose partition y/m/d; use run_date equivalents
-    df = timdex_dataset_multi_source.read_dataframe(run_date=date(2024, 12, 1))
+    df = timdex_dataset_multi_source.records.read_dataframe(run_date=date(2024, 12, 1))
     assert df is not None
-    df_empty = timdex_dataset_multi_source.read_dataframe(run_date=date(2025, 12, 1))
+    df_empty = timdex_dataset_multi_source.records.read_dataframe(
+        run_date=date(2025, 12, 1)
+    )
     assert df_empty is None or len(df_empty) == 0
 
 
@@ -195,7 +113,7 @@ def test_filters_run_date_invalid_raise_error(timdex_dataset_multi_source):
     with pytest.raises(
         ConversionException, match="Conversion Error: Unimplemented type for cast"
     ):
-        timdex_dataset_multi_source.read_dataframe(run_date=999)
+        timdex_dataset_multi_source.records.read_dataframe(run_date=999)
 
 
 def test_dataset_get_s3_filesystem_success(mocker):
@@ -211,35 +129,31 @@ def test_dataset_get_s3_filesystem_success(mocker):
     assert isinstance(s3_filesystem, pa._s3fs.S3FileSystem)
 
 
-def test_dataset_timdex_dataset_validate_success(timdex_dataset):
-    assert timdex_dataset.dataset.to_table().validate() is None  # where None is valid
-
-
-def test_dataset_timdex_dataset_row_count_success(timdex_dataset):
-    assert timdex_dataset.dataset.count_rows() == timdex_dataset.dataset.count_rows()
-
-
 def test_dataset_all_records_not_current_and_not_deduped(
     timdex_dataset_with_runs_with_metadata,
 ):
-    all_records_df = timdex_dataset_with_runs_with_metadata.read_dataframe()
+    all_records_df = timdex_dataset_with_runs_with_metadata.records.read_dataframe()
 
     # assert counts reflect all records from dataset, no deduping
     assert all_records_df.source.value_counts().to_dict() == {"alma": 254, "dspace": 194}
 
     # assert run_date min/max dates align with min/max for all runs
-    assert all_records_df.run_date.min() == date(2024, 12, 1)
-    assert all_records_df.run_date.max() == date(2025, 2, 5)
+    assert all_records_df.run_date.min().date() == date(2024, 12, 1)
+    assert all_records_df.run_date.max().date() == date(2025, 2, 5)
 
 
 def test_dataset_records_data_structure_is_idempotent(timdex_dataset_with_runs):
-    assert os.path.exists(timdex_dataset_with_runs.data_records_root)
-    start_file_count = glob.glob(f"{timdex_dataset_with_runs.data_records_root}/**/*")
+    assert os.path.exists(timdex_dataset_with_runs.records.data_records_root)
+    start_file_count = glob.glob(
+        f"{timdex_dataset_with_runs.records.data_records_root}/**/*"
+    )
 
-    timdex_dataset_with_runs.create_data_structure()
+    timdex_dataset_with_runs.records.create_data_structure()
 
-    assert os.path.exists(timdex_dataset_with_runs.data_records_root)
-    end_file_count = glob.glob(f"{timdex_dataset_with_runs.data_records_root}/**/*")
+    assert os.path.exists(timdex_dataset_with_runs.records.data_records_root)
+    end_file_count = glob.glob(
+        f"{timdex_dataset_with_runs.records.data_records_root}/**/*"
+    )
     assert start_file_count == end_file_count
 
 
@@ -247,7 +161,7 @@ def test_dataset_duckdb_context_created_on_init(timdex_dataset):
     assert isinstance(timdex_dataset.conn, DuckDBPyConnection)
 
 
-def test_dataset_duckdb_context_creates_data_schema(timdex_dataset):
+def test_dataset_duckdb_context_does_not_create_data_schema(timdex_dataset):
     assert (
         timdex_dataset.conn.query("""
             select count(*)
@@ -255,16 +169,14 @@ def test_dataset_duckdb_context_creates_data_schema(timdex_dataset):
             where catalog_name = 'memory'
             and schema_name = 'data';
             """).fetchone()[0]
-        == 1
+        == 0
     )
 
 
 def test_dataset_preload_current_records_default_false(timdex_dataset):
     assert timdex_dataset.preload_current_records is False
-    assert timdex_dataset.metadata.preload_current_records is False
 
 
 def test_dataset_preload_current_records_flag_true(tmp_path):
     td = TIMDEXDataset(str(tmp_path), preload_current_records=True)
     assert td.preload_current_records is True
-    assert td.metadata.preload_current_records is True

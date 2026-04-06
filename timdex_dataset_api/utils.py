@@ -289,3 +289,14 @@ def build_filter_expr_sa(
     if predicates:
         return and_(*predicates)
     return None
+
+
+def strict_date_parse(date_string: str) -> date:
+    return datetime.strptime(date_string, "%Y-%m-%d").astimezone(UTC).date()
+
+
+def datetime_iso_parse(datetime_iso_string: str) -> datetime:
+    parsed_datetime = datetime.fromisoformat(datetime_iso_string)
+    if parsed_datetime.tzinfo is None:
+        return parsed_datetime.replace(tzinfo=UTC)
+    return parsed_datetime.astimezone(UTC)
