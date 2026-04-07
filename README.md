@@ -1,5 +1,3 @@
-from timdex_dataset_api import TIMDEXDataset
-
 # timdex-dataset-api
 Python library for interacting with a TIMDEX parquet dataset located remotely or in S3.  This library is often abbreviated as "TDA".
 
@@ -11,9 +9,10 @@ Python library for interacting with a TIMDEX parquet dataset located remotely or
 - To run unit tests: `make test`
 - To lint the repo: `make lint`
 
-The library version number is set in [`timdex_dataset_api/__init__.py`](timdex_dataset_api/__init__.py), e.g.:
-```python
-__version__ = "2.1.0"
+The library version number is set in [`pyproject.toml`](pyproject.toml), e.g.:
+```toml
+[project]
+version = "5.0.0"
 ```
 
 Updating the version number when making changes to the library will prompt applications that install it, when they have _their_ dependencies updated, to pickup the new version.
@@ -74,15 +73,6 @@ With the env var `MINIO_S3_ENDPOINT_URL` set, this library will configure `pyarr
 
 ## Usage
 
-Currently, the most common use cases are:
-  * **Transmogrifier**: uses TDA to **write** to the parquet dataset
-  * **TIMDEX-Index-Manager (TIM)**: uses TDA to **read** from the parquet dataset
-
-Beyond those two ETL run use cases, others are emerging where this library proves helpful:
-
-  * yielding only the current version of all records in the dataset, useful for quickly re-indexing to Opensearch
-  * high throughput (time) + memory safe (space) access to the dataset for analysis
-
 For both reading and writing, the following env vars are recommended:
 ```shell
 TDA_LOG_LEVEL=INFO
@@ -105,15 +95,19 @@ timdex_dataset = TIMDEXDataset("s3://my-bucket/path/to/dataset")
 timdex_dataset = TIMDEXDataset("/path/to/dataset")
 ```
 
-All read methods for `TIMDEXDataset` allow for the same group of filters which are defined in `timdex_dataset_api.dataset.DatasetFilters`.  Examples are shown below.
+Source-specific operations are available on composed objects such as
+`timdex_dataset.records` and `timdex_dataset.embeddings`.
+
+All read methods for `timdex_dataset.records` allow for the same group of filters.
+Examples are shown below.
 
 ```python
-# read a single row, no filtering
-single_record_dict = next(timdex_dataset.read_dicts_iter())
+# read a single record row, no filtering
+single_record_dict = next(timdex_dataset.records.read_dicts_iter())
 
 
 # get batches of records, filtering to a particular run
-for batch in timdex_dataset.read_batches_iter(
+for batch in timdex_dataset.records.read_batches_iter(
     source="alma",
     run_date="2025-06-01",
     run_id="abc123"
@@ -123,7 +117,7 @@ for batch in timdex_dataset.read_batches_iter(
 
 # use convenience method to yield only transformed records
 # NOTE: this is what TIM uses for indexing to Opensearch for a given ETL run
-for transformed_record in timdex_dataset.read_transformed_records_iter(
+for transformed_record in timdex_dataset.records.read_transformed_records_iter(
     source="aspace",
     run_date="2025-06-01",
     run_id="ghi789"
@@ -133,7 +127,7 @@ for transformed_record in timdex_dataset.read_transformed_records_iter(
 
 # load all records for a given run into a pandas dataframe
 # NOTE: this can be potentially expensive memory-wise if the run is large
-run_df = timdex_dataset.read_dataframe(
+run_df = timdex_dataset.records.read_dataframe(
     source="dspace",
     run_date="2025-06-01",
     run_id="def456"
@@ -146,7 +140,9 @@ See [docs/reading.md](docs/reading.md) for more information.
 
 At this time, the only application that writes to the ETL parquet dataset is Transmogrifier.
 
-To write records to the dataset, you must prepare an iterator of `timdex_dataset_api.record.DatasetRecord`.  Here is some pseudocode for how a dataset write can work:
+To write records to the dataset, you must prepare an iterator of
+`timdex_dataset_api.records.DatasetRecord`.  Here is some pseudocode for how a
+record dataset write can work:
 
 ```python
 from timdex_dataset_api import DatasetRecord, TIMDEXDataset
@@ -171,5 +167,5 @@ records_iter = records_to_write_iter()
     
 # finally, perform the write, relying on the library to handle efficient batching
 timdex_dataset = TIMDEXDataset("/path/to/dataset")
-timdex_dataset.write(records_iter=records_iter)
+timdex_dataset.records.write(records_iter)
 ```

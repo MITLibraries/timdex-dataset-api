@@ -41,7 +41,8 @@ import pyarrow.parquet as pq
 from pyarrow import fs
 
 from timdex_dataset_api.config import configure_dev_logger, configure_logger
-from timdex_dataset_api.dataset import TIMDEX_DATASET_SCHEMA, TIMDEXDataset
+from timdex_dataset_api.dataset import TIMDEXDataset
+from timdex_dataset_api.records import TIMDEXRecords
 
 configure_dev_logger()
 
@@ -125,7 +126,7 @@ def backfill_parquet_file(
 
         # Create run_timestamp column using the exact schema definition
         num_rows = len(table)
-        run_timestamp_field = TIMDEX_DATASET_SCHEMA.field("run_timestamp")
+        run_timestamp_field = TIMDEXRecords.SCHEMA.field("run_timestamp")
         run_timestamp_array = pa.array(
             [creation_date] * num_rows, type=run_timestamp_field.type
         )
