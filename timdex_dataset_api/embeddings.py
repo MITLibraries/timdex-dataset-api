@@ -1,80 +1,13 @@
-import itertools
-import logging
-import time
-import uuid
-from collections.abc import Iterator
-from datetime import UTC, date, datetime
-from typing import TYPE_CHECKING, TypedDict, Unpack, cast
+from datetime import UTC, datetime
+from typing import ClassVar
 
 import attrs
-import pandas as pd
 import pyarrow as pa
-import pyarrow.dataset as ds
 from attrs import asdict, define, field
-from duckdb import DuckDBPyConnection
-from duckdb import IOException as DuckDBIOException
-from duckdb_engine import Dialect as DuckDBDialect
-from sqlalchemy import and_, select, text
 
-from timdex_dataset_api.record import datetime_iso_parse
-from timdex_dataset_api.utils import build_filter_expr_sa
-
-if TYPE_CHECKING:
-    from timdex_dataset_api import TIMDEXDataset
-
-
-logger = logging.getLogger(__name__)
-
-TIMDEX_DATASET_EMBEDDINGS_SCHEMA = pa.schema(
-    (
-        pa.field("timdex_record_id", pa.string()),
-        pa.field("run_id", pa.string()),
-        pa.field("run_record_offset", pa.int32()),
-        pa.field("embedding_timestamp", pa.timestamp("us", tz="UTC")),
-        pa.field("embedding_model", pa.string()),
-        pa.field("embedding_strategy", pa.string()),
-        pa.field("embedding_vector", pa.list_(pa.float32())),
-        pa.field("embedding_object", pa.binary()),
-        pa.field("year", pa.string()),
-        pa.field("month", pa.string()),
-        pa.field("day", pa.string()),
-    )
-)
-
-
-EMBEDDINGS_FILTER_COLUMNS = {
-    "timdex_record_id",
-    "run_id",
-    "run_record_offset",
-    "embedding_timestamp",
-    "embedding_model",
-    "embedding_strategy",
-}
-
-# subset of record metadata columns for filtering and selecting
-METADATA_SELECT_FILTER_COLUMNS = {
-    "source",
-    "run_date",
-    "run_type",
-    "action",
-    "run_timestamp",
-}
-
-
-class EmbeddingsFilters(TypedDict, total=False):
-    # embeddings columns
-    timdex_record_id: str
-    run_id: str
-    run_record_offset: int
-    embedding_timestamp: str | datetime
-    embedding_model: str
-    embedding_strategy: str
-    # record metadata columns
-    source: str | list[str]
-    run_date: str | date | list[str | date]
-    run_type: str | list[str]
-    action: str | list[str]
-    run_timestamp: str | datetime | list[str | datetime]
+from timdex_dataset_api.data_source import TIMDEXDataSource, ValidTable
+from timdex_dataset_api.metadata import CurrentMetadataViewSpec
+from timdex_dataset_api.utils import datetime_iso_parse
 
 
 @define
@@ -135,382 +68,145 @@ class DatasetEmbedding:
         }
 
 
-class TIMDEXEmbeddings:
-    def __init__(self, timdex_dataset: "TIMDEXDataset"):
-        """Init TIMDEXEmbeddings.
+class TIMDEXEmbeddings(TIMDEXDataSource):
+    """Class to handle record embeddings in the TIMDEXDataset."""
 
-        Class to handle the writing and readings of embeddings associated with TIMDEX
-        records.
+    NAME: ClassVar[str] = "embeddings"
 
-        Args:
-            - timdex_dataset: instance of TIMDEXDataset
-        """
-        self.timdex_dataset = timdex_dataset
-        self.conn = timdex_dataset.conn
-
-        self.schema = TIMDEX_DATASET_EMBEDDINGS_SCHEMA
-        self.partition_columns = ["year", "month", "day"]
-
-        # set up embeddings views
-        self._setup_embeddings_views()
-
-    @property
-    def data_embeddings_root(self) -> str:
-        return f"{self.timdex_dataset.location.removesuffix('/')}/data/embeddings"
-
-    def _setup_embeddings_views(self) -> None:
-        """Set up embeddings views in the 'data' schema."""
-        start_time = time.perf_counter()
-
-        try:
-            self._create_embeddings_view(self.conn)
-            self._create_current_embeddings_view(self.conn)
-            self._create_current_run_embeddings_view(self.conn)
-        except DuckDBIOException:
-            logger.debug("No embeddings parquet files found")
-        except Exception as exception:  # noqa: BLE001
-            logger.warning(f"Error creating embeddings views: {exception}")
-
-        logger.debug(
-            "Embeddings views setup for TIMDEXEmbeddings, "
-            f"{round(time.perf_counter() - start_time, 2)}s"
+    SCHEMA: ClassVar[pa.Schema] = pa.schema(
+        (
+            pa.field("timdex_record_id", pa.string()),
+            pa.field("run_id", pa.string()),
+            pa.field("run_record_offset", pa.int32()),
+            pa.field("embedding_timestamp", pa.timestamp("us", tz="UTC")),
+            pa.field("embedding_model", pa.string()),
+            pa.field("embedding_strategy", pa.string()),
+            pa.field("embedding_vector", pa.list_(pa.float32())),
+            pa.field("embedding_object", pa.binary()),
+            pa.field("year", pa.string()),
+            pa.field("month", pa.string()),
+            pa.field("day", pa.string()),
         )
+    )
 
-    def _create_embeddings_view(self, conn: DuckDBPyConnection) -> None:
-        """Create a view that projects over embeddings parquet files."""
-        logger.debug("creating view data.embeddings")
+    DATA_COLUMNS: ClassVar[list[str]] = [
+        "embedding_vector",
+        "embedding_object",
+    ]
 
-        conn.execute(f"""
-            create or replace view data.embeddings as
+    DATA_PATH: ClassVar[str] = "data/embeddings"
+
+    VALID_TABLES: ClassVar[list[ValidTable]] = [
+        ValidTable(
+            name="embeddings",
+            description="All embedding versions across all runs.",
+        ),
+        ValidTable(
+            name="current_embeddings",
+            description=(
+                "One row per (timdex_record_id, embedding_model,"
+                " embedding_strategy) representing the most recent"
+                " embedding for each current record."
+            ),
+        ),
+        ValidTable(
+            name="current_run_embeddings",
+            description=(
+                "One row per (timdex_record_id, run_id, embedding_model,"
+                " embedding_strategy) representing the most recent"
+                " embedding within each run, regardless of whether the"
+                " record is current."
+            ),
+        ),
+    ]
+
+    CURRENT_METADATA_VIEW_QUERY: ClassVar[str] = """
+        with
+            -- CTE of embeddings attached to current record versions only
+            ce_current_record_embeddings as
             (
-                select *
-                from read_parquet(
-                    '{self.data_embeddings_root}/**/*.parquet',
-                    hive_partitioning=true,
-                    filename=true
+                select
+                    e.*
+                from metadata.embeddings e
+                join metadata.current_records r using (
+                    source,
+                    timdex_record_id,
+                    run_id,
+                    run_record_offset
                 )
-            );
-            """)
+            ),
 
-    def _create_current_embeddings_view(self, conn: DuckDBPyConnection) -> None:
-        """Create a view of current embedding records.
-
-        This builds on the 'data.embeddings' view. This view includes only
-        the most current version of each embedding grouped by
-        [timdex_record_id, embedding_strategy].
-        """
-        logger.debug("creating view data.current_embeddings")
-
-        # SQL for the current records logic (CTEs)
-        conn.execute("""
-            create or replace view data.current_embeddings as
+            -- CTE of current-record embeddings ranked by embedding recency
+            ce_ranked_embeddings as
             (
-                with
-                    -- CTE of embeddings ranked by embedding_timestamp
-                    ce_ranked_embeddings as
-                    (
-                        select
-                            *,
-                            row_number() over (
-                                partition by timdex_record_id, embedding_strategy
-                                order by
-                                    embedding_timestamp desc nulls last,
-                                    run_record_offset desc nulls last
-                            ) as rn
-                        from data.embeddings
-                    )
-                -- final select for current records (rn = 1)
                 select
-                    * exclude (rn)
-                from ce_ranked_embeddings
-                where rn = 1
-            );
-            """)
+                    e.*,
+                    row_number() over (
+                        partition by
+                            e.timdex_record_id,
+                            e.embedding_model,
+                            e.embedding_strategy
+                        order by
+                            e.embedding_timestamp desc nulls last,
+                            e.filename desc nulls last
+                    ) as rn
+                from ce_current_record_embeddings e
+            )
+        -- final select for current embeddings (rn = 1)
+        select
+            * exclude (rn)
+        from ce_ranked_embeddings
+        where rn = 1
+    """
 
-    def _create_current_run_embeddings_view(self, conn: DuckDBPyConnection) -> None:
-        """Create a view of current embedding records per run.
+    CURRENT_METADATA_VIEW_SPEC: ClassVar[CurrentMetadataViewSpec] = (
+        CurrentMetadataViewSpec(
+            name="current_embeddings",
+            query_sql=CURRENT_METADATA_VIEW_QUERY,
+            required_metadata_tables=["embeddings", "current_records"],
+        )
+    )
 
-        This builds on the 'data.embeddings' view. This view includes only
-        the most current version of each embedding per run grouped by
-        [timdex_record_id, run_id, embedding_strategy,].
-        """
-        logger.debug("creating view data.current_run_embeddings")
-
-        # SQL for the current records logic (CTEs)
-        conn.execute("""
-            create or replace view data.current_run_embeddings as
+    CURRENT_RUN_METADATA_VIEW_QUERY: ClassVar[str] = """
+        with
+            -- CTE of embeddings ranked by embedding recency within a run and family
+            -- keep run_timestamp because the same run_id can be written more than once
+            -- keep run_record_offset as an intra-run tie-break when the same logical
+            -- record appears more than once within a run
+            crce_ranked_embeddings as
             (
-                with
-                    -- CTE of embeddings ranked by embedding_timestamp
-                    ce_ranked_embeddings as
-                    (
-                        select
-                            *,
-                            row_number() over (
-                                partition by timdex_record_id, run_id, embedding_strategy
-                                order by
-                                    embedding_timestamp desc nulls last,
-                                    run_id desc nulls last,
-                                    run_record_offset desc nulls last
-                            ) as rn
-                        from data.embeddings
-                    )
-                -- final select for current records (rn = 1)
                 select
-                    * exclude (rn)
-                from ce_ranked_embeddings
-                where rn = 1
-            );
-            """)
-
-    def write(
-        self,
-        embeddings_iter: Iterator[DatasetEmbedding],
-        *,
-        use_threads: bool = True,
-    ) -> list[ds.WrittenFile]:
-        """Write embeddings as parquet files to /data/embeddings.
-
-        Approach is similar to TIMDEXDataset.write() for Records:
-            - use self.data_embeddings_root for location of embeddings parquet files
-            - use pyarrow Dataset to write rows
-        """
-        start_time = time.perf_counter()
-        written_files: list[ds.WrittenFile] = []
-
-        filesystem, path = self.timdex_dataset.parse_location(self.data_embeddings_root)
-
-        embedding_batches_iter = self.create_embedding_batches(embeddings_iter)
-        ds.write_dataset(
-            embedding_batches_iter,
-            base_dir=path,
-            basename_template="%s-{i}.parquet" % (str(uuid.uuid4())),  # noqa: UP031
-            existing_data_behavior="overwrite_or_ignore",
-            filesystem=filesystem,
-            file_visitor=lambda written_file: written_files.append(written_file),  # type: ignore[arg-type] # noqa: PLW0108
-            format="parquet",
-            max_open_files=500,
-            max_rows_per_file=self.timdex_dataset.config.max_rows_per_file,
-            max_rows_per_group=self.timdex_dataset.config.max_rows_per_group,
-            partitioning=self.partition_columns,
-            partitioning_flavor="hive",
-            schema=self.schema,
-            use_threads=use_threads,
-        )
-
-        self.log_write_statistics(start_time, written_files)
-
-        return written_files
-
-    def create_embedding_batches(
-        self, embeddings_iter: Iterator["DatasetEmbedding"]
-    ) -> Iterator[pa.RecordBatch]:
-        for i, embedding_batch in enumerate(
-            itertools.batched(
-                embeddings_iter, self.timdex_dataset.config.write_batch_size
+                    e.*,
+                    row_number() over (
+                        partition by
+                            e.timdex_record_id,
+                            e.run_id,
+                            e.embedding_model,
+                            e.embedding_strategy
+                        order by
+                            e.run_timestamp desc nulls last,
+                            e.embedding_timestamp desc nulls last,
+                            e.run_record_offset desc nulls last,
+                            e.filename desc nulls last
+                    ) as rn
+                from metadata.embeddings e
             )
-        ):
-            embedding_dicts = [embedding.to_dict() for embedding in embedding_batch]
-            batch = pa.RecordBatch.from_pylist(embedding_dicts)
-            logger.debug(f"Yielding batch {i + 1} for dataset writing.")
-            yield batch
+        -- final select for current run embeddings (rn = 1)
+        select
+            * exclude (rn)
+        from crce_ranked_embeddings
+        where rn = 1
+    """
 
-    def log_write_statistics(
-        self,
-        start_time: float,
-        written_files: list[ds.WrittenFile],
-    ) -> None:
-        """Parse written files from write and log statistics."""
-        total_time = round(time.perf_counter() - start_time, 2)
-        total_files = len(written_files)
-        total_rows = sum(
-            [wf.metadata.num_rows for wf in written_files]  # type: ignore[attr-defined]
+    CURRENT_RUN_METADATA_VIEW_SPEC: ClassVar[CurrentMetadataViewSpec] = (
+        CurrentMetadataViewSpec(
+            name="current_run_embeddings",
+            query_sql=CURRENT_RUN_METADATA_VIEW_QUERY,
+            required_metadata_tables=["embeddings", "records"],
         )
-        total_size = sum([wf.size for wf in written_files])  # type: ignore[attr-defined]
-        logger.info(
-            f"Dataset write complete - elapsed: "
-            f"{total_time}s, "
-            f"total files: {total_files}, "
-            f"total rows: {total_rows}, "
-            f"total size: {total_size}"
-        )
+    )
 
-    def read_batches_iter(
-        self,
-        table: str = "embeddings",
-        columns: list[str] | None = None,
-        limit: int | None = None,
-        where: str | None = None,
-        **filters: Unpack[EmbeddingsFilters],
-    ) -> Iterator[pa.RecordBatch]:
-        """Yield ETL records as pyarrow.RecordBatches.
-
-        This is the base read method. All read methods use this for streaming
-        batches of records. This method relies on DuckDB to project over all
-        embeddings parquet files (i.e., no "metadata layer") and filter data.
-        """
-        start_time = time.perf_counter()
-
-        if table not in ["embeddings", "current_embeddings", "current_run_embeddings"]:
-            raise ValueError(f"Invalid table: '{table}'")
-
-        # ensure table exists
-        try:
-            self.timdex_dataset.get_sa_table("data", table)
-        except ValueError:
-            logger.warning(
-                f"Table '{table}' not found in DuckDB context.  Embeddings may not yet "
-                "exist or TIMDEXDataset.refresh() may be required."
-            )
-            return
-
-        data_query = self._build_query(
-            table,
-            columns,
-            limit,
-            where,
-            **filters,
-        )
-        cursor = self.conn.execute(data_query)
-        yield from cursor.to_arrow_reader(
-            batch_size=self.timdex_dataset.config.read_batch_size
-        )
-
-        logger.debug(f"read() elapsed: {round(time.perf_counter() - start_time, 2)}s")
-
-    def _build_query(
-        self,
-        table: str = "embeddings",
-        columns: list[str] | None = None,
-        limit: int | None = None,
-        where: str | None = None,
-        **filters: Unpack[EmbeddingsFilters],
-    ) -> str:
-        """Build SQL query using SQLAlchemy.
-
-        The method returns a SQL query string, which SQLAlchemy executes to
-        fetch results. Always joins to metadata.records to enable filtering
-        by metadata columns (source, run_date, run_type, action, run_timestamp).
-        """
-        embeddings_table = self.timdex_dataset.get_sa_table("data", table)
-        metadata_table = self.timdex_dataset.get_sa_table("metadata", "records")
-
-        # select specific columns or default to all from embeddings + metadata
-        if columns:
-            embeddings_cols = []
-            metadata_cols = []
-
-            for col_name in columns:
-                if col_name in TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names:
-                    embeddings_cols.append(embeddings_table.c[col_name])
-                elif col_name in METADATA_SELECT_FILTER_COLUMNS:
-                    metadata_cols.append(metadata_table.c[col_name])
-                else:
-                    raise ValueError(f"Invalid column: {col_name}")
-
-            stmt = select(*embeddings_cols, *metadata_cols)
-        else:
-            embeddings_cols = [
-                embeddings_table.c[col] for col in TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names
-            ]
-            metadata_cols = [
-                metadata_table.c[col] for col in METADATA_SELECT_FILTER_COLUMNS
-            ]
-            stmt = select(*embeddings_cols, *metadata_cols)
-
-        # create SQL statement with join to metadata.records
-        join_condition = and_(
-            embeddings_table.c.timdex_record_id == metadata_table.c.timdex_record_id,
-            embeddings_table.c.run_id == metadata_table.c.run_id,
-            embeddings_table.c.run_record_offset == metadata_table.c.run_record_offset,
-        )
-        stmt = stmt.select_from(embeddings_table.join(metadata_table, join_condition))
-
-        # split filters between embeddings and metadata tables
-        embeddings_filters = {
-            k: v for k, v in filters.items() if k in EMBEDDINGS_FILTER_COLUMNS
-        }
-        record_metadata_filters = {
-            k: v for k, v in filters.items() if k in METADATA_SELECT_FILTER_COLUMNS
-        }
-
-        # apply embeddings filters
-        embeddings_filter_expr = build_filter_expr_sa(
-            embeddings_table, **cast("dict", embeddings_filters)
-        )
-        if embeddings_filter_expr is not None:
-            stmt = stmt.where(embeddings_filter_expr)
-
-        # apply metadata filters
-        record_metadata_filter_expr = build_filter_expr_sa(
-            metadata_table, **cast("dict", record_metadata_filters)
-        )
-        if record_metadata_filter_expr is not None:
-            stmt = stmt.where(record_metadata_filter_expr)
-
-        # explicit raw WHERE string
-        if where is not None and where.strip():
-            stmt = stmt.where(text(where))
-
-        # apply limit if present
-        if limit:
-            stmt = stmt.limit(limit)
-
-        # using DuckDB dialect, compile to SQL string
-        compiled = stmt.compile(
-            dialect=DuckDBDialect(),
-            compile_kwargs={"literal_binds": True},
-        )
-        return str(compiled)
-
-    def read_dataframes_iter(
-        self,
-        table: str = "embeddings",
-        columns: list[str] | None = None,
-        limit: int | None = None,
-        where: str | None = None,
-        **filters: Unpack[EmbeddingsFilters],
-    ) -> Iterator[pd.DataFrame]:
-        for record_batch in self.read_batches_iter(
-            table=table, columns=columns, limit=limit, where=where, **filters
-        ):
-            yield record_batch.to_pandas()
-
-    def read_dataframe(
-        self,
-        table: str = "embeddings",
-        columns: list[str] | None = None,
-        limit: int | None = None,
-        where: str | None = None,
-        **filters: Unpack[EmbeddingsFilters],
-    ) -> pd.DataFrame | None:
-        df_batches = [
-            record_batch.to_pandas()
-            for record_batch in self.read_batches_iter(
-                table=table,
-                columns=columns,
-                limit=limit,
-                where=where,
-                **filters,
-            )
-        ]
-        if not df_batches:
-            return None
-        return pd.concat(df_batches)
-
-    def read_dicts_iter(
-        self,
-        table: str = "embeddings",
-        columns: list[str] | None = None,
-        limit: int | None = None,
-        where: str | None = None,
-        **filters: Unpack[EmbeddingsFilters],
-    ) -> Iterator[dict]:
-        for record_batch in self.read_batches_iter(
-            table=table,
-            columns=columns,
-            limit=limit,
-            where=where,
-            **filters,
-        ):
-            yield from record_batch.to_pylist()
+    CURRENT_VIEW_SPECS: ClassVar[list[CurrentMetadataViewSpec]] = [
+        CURRENT_METADATA_VIEW_SPEC,
+        CURRENT_RUN_METADATA_VIEW_SPEC,
+    ]

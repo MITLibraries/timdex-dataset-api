@@ -1,26 +1,18 @@
 # ruff: noqa: PLR2004
 import json
-import math
 import os
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 
-from tests.utils import generate_sample_embeddings_for_run
-from timdex_dataset_api.embeddings import (
-    METADATA_SELECT_FILTER_COLUMNS,
-    TIMDEX_DATASET_EMBEDDINGS_SCHEMA,
-    DatasetEmbedding,
-    TIMDEXEmbeddings,
-)
+from tests.utils import generate_sample_embeddings_for_run, generate_sample_records
+from timdex_dataset_api import TIMDEXDataset
+from timdex_dataset_api.embeddings import DatasetEmbedding, TIMDEXEmbeddings
 
-EMBEDDINGS_COLUMNS_SET = set(TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names)
-EMBEDDINGS_WITH_METADATA_COLUMNS_SET = EMBEDDINGS_COLUMNS_SET | set(
-    METADATA_SELECT_FILTER_COLUMNS
-)
+EMBEDDINGS_DEFAULT_COLUMNS_SET = set(TIMDEXEmbeddings.DEFAULT_READ_COLUMNS)
 
 
 def test_dataset_embedding_init():
@@ -83,7 +75,8 @@ def test_embeddings_data_root_property(timdex_dataset_empty):
     timdex_embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
 
     expected = f"{timdex_dataset_empty.location.removesuffix('/')}/data/embeddings"
-    assert timdex_embeddings.data_embeddings_root == expected
+    assert timdex_embeddings.data_root == expected
+    assert os.path.exists(expected)
 
 
 def test_embeddings_write_basic(timdex_dataset_empty, sample_embeddings_generator):
@@ -95,7 +88,7 @@ def test_embeddings_write_basic(timdex_dataset_empty, sample_embeddings_generato
 
     # verify written data can be read
     dataset = ds.dataset(
-        timdex_embeddings.data_embeddings_root, format="parquet", partitioning="hive"
+        timdex_embeddings.data_root, format="parquet", partitioning="hive"
     )
     assert dataset.count_rows() == 100
 
@@ -116,45 +109,32 @@ def test_embeddings_write_schema_applied(
 
     # manually load dataset to confirm schema
     dataset = ds.dataset(
-        timdex_embeddings.data_embeddings_root,
+        timdex_embeddings.data_root,
         format="parquet",
         partitioning="hive",
     )
 
-    assert set(dataset.schema.names) == set(TIMDEX_DATASET_EMBEDDINGS_SCHEMA.names)
-
-
-def test_embeddings_create_batches(timdex_dataset_empty, sample_embeddings_generator):
-    timdex_embeddings = TIMDEXEmbeddings(timdex_dataset_empty)
-    total_embeddings = 101
-    timdex_dataset_empty.config.write_batch_size = 50
-
-    batches = list(
-        timdex_embeddings.create_embedding_batches(
-            sample_embeddings_generator(total_embeddings)
-        )
-    )
-
-    assert len(batches) == math.ceil(
-        total_embeddings / timdex_dataset_empty.config.write_batch_size
-    )
+    assert set(dataset.schema.names) == set(TIMDEXEmbeddings.SCHEMA.names)
 
 
 def test_embeddings_read_batches_yields_pyarrow_record_batches(
     timdex_dataset_empty, sample_embeddings_generator, sample_records_generator
 ):
     # write matching records and rebuild metadata
-    timdex_dataset_empty.write(
+    timdex_dataset_empty.records.write(
         sample_records_generator(100, source="alma", run_id="test-run"),
         write_append_deltas=False,
     )
     timdex_dataset_empty.metadata.rebuild_dataset_metadata()
     timdex_dataset_empty.refresh()
 
-    # write embeddings and refresh to pick up new views
+    # write embeddings
     timdex_dataset_empty.embeddings.write(
         sample_embeddings_generator(100, run_id="test-run")
     )
+
+    # rebuild metadata to include embeddings, then refresh
+    timdex_dataset_empty.metadata.rebuild_dataset_metadata()
     timdex_dataset_empty.refresh()
 
     batches = timdex_dataset_empty.embeddings.read_batches_iter()
@@ -165,7 +145,7 @@ def test_embeddings_read_batches_yields_pyarrow_record_batches(
 def test_embeddings_read_batches_all_columns_by_default(timdex_embeddings_with_runs):
     batches = timdex_embeddings_with_runs.read_batches_iter()
     batch = next(batches)
-    assert set(batch.column_names) == EMBEDDINGS_WITH_METADATA_COLUMNS_SET
+    assert set(batch.column_names) == EMBEDDINGS_DEFAULT_COLUMNS_SET
 
 
 def test_embeddings_read_batches_filter_columns(timdex_embeddings_with_runs):
@@ -217,7 +197,7 @@ def test_embeddings_read_batches_gets_full_dataset(timdex_embeddings_with_runs):
     batches = timdex_embeddings_with_runs.read_batches_iter()
     table = pa.Table.from_batches(batches)
     dataset = ds.dataset(
-        timdex_embeddings_with_runs.data_embeddings_root,
+        timdex_embeddings_with_runs.data_root,
         format="parquet",
         partitioning="hive",
     )
@@ -232,7 +212,7 @@ def test_embeddings_read_batches_with_filters_gets_subset_of_dataset(
     )
     table = pa.Table.from_batches(batches)
     dataset = ds.dataset(
-        timdex_embeddings_with_runs.data_embeddings_root,
+        timdex_embeddings_with_runs.data_root,
         format="parquet",
         partitioning="hive",
     )
@@ -279,7 +259,7 @@ def test_embeddings_read_dataframes_yields_dataframes(timdex_embeddings_with_run
 def test_embeddings_read_dataframe_gets_full_dataset(timdex_embeddings_with_runs):
     df = timdex_embeddings_with_runs.read_dataframe()
     dataset = ds.dataset(
-        timdex_embeddings_with_runs.data_embeddings_root,
+        timdex_embeddings_with_runs.data_root,
         format="parquet",
         partitioning="hive",
     )
@@ -293,7 +273,7 @@ def test_embeddings_read_dicts_yields_dictionary_for_each_embeddings_record(
     dict_iter = timdex_embeddings_with_runs.read_dicts_iter()
     record = next(dict_iter)
     assert isinstance(record, dict)
-    assert set(record.keys()) == EMBEDDINGS_WITH_METADATA_COLUMNS_SET
+    assert set(record.keys()) == EMBEDDINGS_DEFAULT_COLUMNS_SET
 
 
 def test_current_embeddings_view_single_run(timdex_dataset_for_embeddings_views):
@@ -301,6 +281,9 @@ def test_current_embeddings_view_single_run(timdex_dataset_for_embeddings_views)
 
     # write embeddings for run "apple-1"
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="apple-1"))
+
+    # rebuild metadata to include embeddings, then refresh
+    td.metadata.rebuild_dataset_metadata()
     td.refresh()
 
     # query current_embeddings for apple source using read_dataframe
@@ -308,7 +291,7 @@ def test_current_embeddings_view_single_run(timdex_dataset_for_embeddings_views)
 
     assert len(result) == 10
     assert (result["run_id"] == "apple-1").all()
-    assert (result["run_date"] == date(2025, 6, 1)).all()
+    assert (result["run_date"] == pd.Timestamp("2025-06-01")).all()
 
 
 def test_current_embeddings_view_multiple_runs(timdex_dataset_for_embeddings_views):
@@ -317,6 +300,9 @@ def test_current_embeddings_view_multiple_runs(timdex_dataset_for_embeddings_vie
     # write embeddings for runs "orange-1" and "orange-2"
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="orange-1"))
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="orange-2"))
+
+    # rebuild metadata to include embeddings, then refresh
+    td.metadata.rebuild_dataset_metadata()
     td.refresh()
 
     # query current_embeddings for orange source using read_dataframe
@@ -329,18 +315,190 @@ def test_current_embeddings_view_multiple_runs(timdex_dataset_for_embeddings_vie
     # verify 5 from orange-1 (records not in orange-2, run_date 2025-07-01)
     orange_1_records = result[result["run_id"] == "orange-1"]
     assert len(orange_1_records) == 5
-    assert (orange_1_records["run_date"] == date(2025, 7, 1)).all()
+    assert (orange_1_records["run_date"] == pd.Timestamp("2025-07-01")).all()
 
     # verify 5 from orange-2 (newer records, run_date 2025-07-02)
     orange_2_records = result[result["run_id"] == "orange-2"]
     assert len(orange_2_records) == 5
-    assert (orange_2_records["run_date"] == date(2025, 7, 2)).all()
+    assert (orange_2_records["run_date"] == pd.Timestamp("2025-07-02")).all()
+
+
+def test_current_embeddings_prefers_record_recency_over_embedding_recency(
+    tmp_path,
+):
+    td = TIMDEXDataset(str(tmp_path / "record_recency_wins_dataset/"))
+
+    td.records.write(
+        generate_sample_records(
+            num_records=10,
+            source="pear",
+            run_date="2025-09-01",
+            run_type="full",
+            run_id="pear-1",
+        ),
+        write_append_deltas=False,
+    )
+    td.records.write(
+        generate_sample_records(
+            num_records=5,
+            source="pear",
+            run_date="2025-09-02",
+            run_type="daily",
+            run_id="pear-2",
+        ),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+    td.refresh()
+
+    # older record version gets a later embedding event
+    td.embeddings.write(
+        generate_sample_embeddings_for_run(
+            td,
+            run_id="pear-1",
+            embedding_timestamp="2025-09-04T00:00:00+00:00",
+        ),
+        write_append_deltas=False,
+    )
+    td.embeddings.write(
+        generate_sample_embeddings_for_run(
+            td,
+            run_id="pear-2",
+            embedding_timestamp="2025-09-03T00:00:00+00:00",
+        ),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+    td.refresh()
+
+    result = td.embeddings.read_dataframe(table="current_embeddings", source="pear")
+
+    assert len(result) == 10
+
+    overlap = result[result["timdex_record_id"].isin([f"pear:{i}" for i in range(5)])]
+    non_overlap = result[
+        result["timdex_record_id"].isin([f"pear:{i}" for i in range(5, 10)])
+    ]
+
+    assert (overlap["run_id"] == "pear-2").all()
+    assert (non_overlap["run_id"] == "pear-1").all()
+    assert (
+        overlap["embedding_timestamp"] == pd.Timestamp("2025-09-03T00:00:00+00:00")
+    ).all()
+
+
+def test_current_embeddings_excludes_superseded_record_versions(tmp_path):
+    td = TIMDEXDataset(str(tmp_path / "current_embeddings_current_records_only/"))
+
+    td.records.write(
+        generate_sample_records(
+            num_records=10,
+            source="grape",
+            run_date="2025-09-01",
+            run_type="full",
+            run_id="grape-1",
+        ),
+        write_append_deltas=False,
+    )
+    td.records.write(
+        generate_sample_records(
+            num_records=5,
+            source="grape",
+            run_date="2025-09-02",
+            run_type="daily",
+            run_id="grape-2",
+        ),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+
+    td.embeddings.write(
+        generate_sample_embeddings_for_run(td, run_id="grape-1"),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+    td.refresh()
+
+    result = td.embeddings.read_dataframe(table="current_embeddings", source="grape")
+
+    assert len(result) == 5
+    assert set(result["timdex_record_id"]) == {f"grape:{i}" for i in range(5, 10)}
+    assert (result["run_id"] == "grape-1").all()
+
+
+def test_current_embeddings_view_keeps_models_separate(tmp_path):
+    td = TIMDEXDataset(str(tmp_path / "multiple_models_current_embeddings/"))
+
+    td.records.write(
+        generate_sample_records(
+            num_records=10,
+            source="plum",
+            run_date="2025-10-01",
+            run_type="full",
+            run_id="plum-1",
+        ),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+    td.refresh()
+
+    td.embeddings.write(
+        generate_sample_embeddings_for_run(
+            td,
+            run_id="plum-1",
+            embedding_model="model-a",
+            embedding_strategy="full_record",
+        ),
+        write_append_deltas=False,
+    )
+    td.embeddings.write(
+        generate_sample_embeddings_for_run(
+            td,
+            run_id="plum-1",
+            embedding_model="model-b",
+            embedding_strategy="full_record",
+        ),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+    td.refresh()
+
+    result = td.embeddings.read_dataframe(table="current_embeddings", source="plum")
+
+    assert len(result) == 20
+    assert set(result["embedding_model"].unique()) == {"model-a", "model-b"}
+    assert result.groupby("timdex_record_id")["embedding_model"].nunique().eq(2).all()
 
 
 def test_current_embeddings_view_handles_duplicate_run_embeddings(
-    timdex_dataset_for_embeddings_views,
+    tmp_path,
 ):
-    td = timdex_dataset_for_embeddings_views
+    """Test that duplicate embeddings for the same run are handled correctly."""
+    td = TIMDEXDataset(str(tmp_path / "dup_run_dataset/"))
+
+    # scenario: lemon - full run + daily run (daily will be embedded twice)
+    td.records.write(
+        generate_sample_records(
+            num_records=10,
+            source="lemon",
+            run_date="2025-08-01",
+            run_type="full",
+            run_id="lemon-1",
+        ),
+        write_append_deltas=False,
+    )
+    td.records.write(
+        generate_sample_records(
+            num_records=5,
+            source="lemon",
+            run_date="2025-08-02",
+            run_type="daily",
+            run_id="lemon-2",
+        ),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+    td = TIMDEXDataset(td.location)
 
     # write embeddings for run "lemon-1"
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="lemon-1"))
@@ -358,6 +516,9 @@ def test_current_embeddings_view_handles_duplicate_run_embeddings(
             td, run_id="lemon-2", embedding_timestamp="2025-08-03T00:00:00+00:00"
         )
     )
+
+    # rebuild metadata to include embeddings, then refresh
+    td.metadata.rebuild_dataset_metadata()
     td.refresh()
 
     # check all embeddings for lemon-2 to verify both writes exist
@@ -378,20 +539,45 @@ def test_current_embeddings_view_handles_duplicate_run_embeddings(
     # verify lemon-1 embeddings (run_date 2025-08-01)
     lemon_1_result = result[result["run_id"] == "lemon-1"]
     assert len(lemon_1_result) == 5
-    assert (lemon_1_result["run_date"] == date(2025, 8, 1)).all()
+    assert (lemon_1_result["run_date"] == pd.Timestamp("2025-08-01")).all()
 
     # verify lemon-2 embeddings have the later embedding timestamp (run_date 2025-08-02)
     lemon_2_result = result[result["run_id"] == "lemon-2"]
     assert len(lemon_2_result) == 5
-    assert (lemon_2_result["run_date"] == date(2025, 8, 2)).all()
+    assert (lemon_2_result["run_date"] == pd.Timestamp("2025-08-02")).all()
 
     # all lemon-2 current embeddings should have the later embedding timestamp
     max_timestamp = all_lemon_2["embedding_timestamp"].max()
     assert (lemon_2_result["embedding_timestamp"] == max_timestamp).all()
 
 
-def test_embeddings_view_includes_all_embeddings(timdex_dataset_for_embeddings_views):
-    td = timdex_dataset_for_embeddings_views
+def test_embeddings_view_includes_all_embeddings(tmp_path):
+    """Test that the embeddings view includes all embeddings from multiple writes."""
+    td = TIMDEXDataset(str(tmp_path / "all_embeddings_dataset/"))
+
+    # scenario: lemon - full run + daily run (daily will be embedded twice)
+    td.records.write(
+        generate_sample_records(
+            num_records=10,
+            source="lemon",
+            run_date="2025-08-01",
+            run_type="full",
+            run_id="lemon-1",
+        ),
+        write_append_deltas=False,
+    )
+    td.records.write(
+        generate_sample_records(
+            num_records=5,
+            source="lemon",
+            run_date="2025-08-02",
+            run_type="daily",
+            run_id="lemon-2",
+        ),
+        write_append_deltas=False,
+    )
+    td.metadata.rebuild_dataset_metadata()
+    td = TIMDEXDataset(td.location)
 
     # write embeddings for lemon-1
     td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="lemon-1"))
@@ -409,6 +595,9 @@ def test_embeddings_view_includes_all_embeddings(timdex_dataset_for_embeddings_v
             td, run_id="lemon-2", embedding_timestamp="2025-08-03T00:00:00+00:00"
         )
     )
+
+    # rebuild metadata to include embeddings, then refresh
+    td.metadata.rebuild_dataset_metadata()
     td.refresh()
 
     # query all embeddings for lemon source
@@ -421,22 +610,21 @@ def test_embeddings_view_includes_all_embeddings(timdex_dataset_for_embeddings_v
     # verify run_date distribution
     lemon_1_embeddings = result[result["run_id"] == "lemon-1"]
     assert len(lemon_1_embeddings) == 10
-    assert (lemon_1_embeddings["run_date"] == date(2025, 8, 1)).all()
+    assert (lemon_1_embeddings["run_date"] == pd.Timestamp("2025-08-01")).all()
 
     lemon_2_embeddings = result[result["run_id"] == "lemon-2"]
     assert len(lemon_2_embeddings) == 10  # 5 from each write
-    assert (lemon_2_embeddings["run_date"] == date(2025, 8, 2)).all()
+    assert (lemon_2_embeddings["run_date"] == pd.Timestamp("2025-08-02")).all()
 
 
 def test_embeddings_read_batches_iter_returns_empty_when_embeddings_missing(
     timdex_dataset_empty, caplog
 ):
-    result = list(timdex_dataset_empty.embeddings.read_batches_iter())
-    assert result == []
-    assert (
-        "Table 'embeddings' not found in DuckDB context.  Embeddings may not yet exist "
-        "or TIMDEXDataset.refresh() may be required." in caplog.text
-    )
+    with pytest.raises(
+        ValueError,
+        match=r"Table 'embeddings' not found in DuckDB context.*rebuild_dataset_metadata",
+    ):
+        list(timdex_dataset_empty.embeddings.read_batches_iter())
 
 
 def test_embeddings_read_batches_iter_returns_empty_for_invalid_table(

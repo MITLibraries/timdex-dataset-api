@@ -19,7 +19,7 @@ from timdex_dataset_api.embeddings import (
     TIMDEXEmbeddings,
 )
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
-from timdex_dataset_api.record import DatasetRecord
+from timdex_dataset_api.records import DatasetRecord
 
 
 @pytest.fixture(autouse=True)
@@ -81,7 +81,7 @@ def timdex_dataset(tmp_path, timdex_dataset_config) -> TIMDEXDataset:
     dataset = TIMDEXDataset(
         str(tmp_path / "basic_dataset/"), config=timdex_dataset_config
     )
-    dataset.write(
+    dataset.records.write(
         generate_sample_records(
             num_records=1000,
             source="alma",
@@ -111,7 +111,7 @@ def timdex_dataset_multi_source(tmp_path_factory) -> TIMDEXDataset:
         ("libguides", "jkl123"),
         ("gismit", "mno456"),
     ]:
-        dataset.write(
+        dataset.records.write(
             generate_sample_records(
                 num_records=1000,
                 source=source,
@@ -170,7 +170,7 @@ def timdex_dataset_with_runs(
     for num_records, source, run_date, run_type, action, run_id in (
         alma_runs + dspace_runs
     ):
-        dataset.write(
+        dataset.records.write(
             generate_sample_records(
                 num_records=num_records,
                 source=source,
@@ -208,7 +208,7 @@ def timdex_dataset_same_day_runs(tmp_path) -> TIMDEXDataset:
     ]
 
     for num_records, source, run_date, run_type, action, run_id, run_timestamp in runs:
-        dataset.write(
+        dataset.records.write(
             generate_sample_records(
                 num_records=num_records,
                 source=source,
@@ -268,7 +268,7 @@ def timdex_metadata_with_deltas(
         action="index",
         run_id="run-delta-1",
     )
-    td.write(records)
+    td.records.write(records)
 
     # return fresh TIMDEXDataset's metadata
     return TIMDEXDataset(timdex_dataset_with_runs.location).metadata
@@ -281,7 +281,7 @@ def timdex_metadata_merged_deltas(
     """TIMDEXDatasetMetadata after merging append deltas to static database file."""
     # copy directory of a dataset with runs
     dataset_location = str(tmp_path / "cloned_dataset_with_runs/")
-    shutil.copytree(timdex_metadata_with_deltas.location, dataset_location)
+    shutil.copytree(timdex_metadata_with_deltas.timdex_dataset.location, dataset_location)
 
     # clone dataset with runs using new dataset location
     td = TIMDEXDataset(dataset_location, config=timdex_dataset_with_runs.config)
@@ -306,11 +306,11 @@ def timdex_embeddings_with_runs(timdex_dataset_empty) -> TIMDEXEmbeddings:
     timdex_dataset = timdex_dataset_empty
 
     # write matching records for embeddings
-    timdex_dataset.write(
+    timdex_dataset.records.write(
         generate_sample_records(100, source="alma", run_id="abc123"),
         write_append_deltas=False,
     )
-    timdex_dataset.write(
+    timdex_dataset.records.write(
         generate_sample_records(50, source="alma", run_id="def456"),
         write_append_deltas=False,
     )
@@ -327,7 +327,8 @@ def timdex_embeddings_with_runs(timdex_dataset_empty) -> TIMDEXEmbeddings:
         generate_sample_embeddings_for_run(timdex_dataset, run_id="def456")
     )
 
-    # reload TIMDEXDataset instance once more
+    # rebuild metadata to include embeddings, then reload
+    timdex_dataset.metadata.rebuild_dataset_metadata()
     return TIMDEXDataset(timdex_dataset_empty.location).embeddings
 
 
@@ -343,7 +344,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
     timdex_dataset_dataset = timdex_dataset_empty
 
     # scenario 1: apple - single full run
-    timdex_dataset_dataset.write(
+    timdex_dataset_dataset.records.write(
         generate_sample_records(
             num_records=10,
             source="apple",
@@ -355,7 +356,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
     )
 
     # scenario 2: orange - full run + daily run
-    timdex_dataset_dataset.write(
+    timdex_dataset_dataset.records.write(
         generate_sample_records(
             num_records=10,
             source="orange",
@@ -365,7 +366,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
         ),
         write_append_deltas=False,
     )
-    timdex_dataset_dataset.write(
+    timdex_dataset_dataset.records.write(
         generate_sample_records(
             num_records=5,
             source="orange",
@@ -377,7 +378,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
     )
 
     # scenario 3: lemon - full run + daily run (daily will be embedded twice)
-    timdex_dataset_dataset.write(
+    timdex_dataset_dataset.records.write(
         generate_sample_records(
             num_records=10,
             source="lemon",
@@ -387,7 +388,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
         ),
         write_append_deltas=False,
     )
-    timdex_dataset_dataset.write(
+    timdex_dataset_dataset.records.write(
         generate_sample_records(
             num_records=5,
             source="lemon",
