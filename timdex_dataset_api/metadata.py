@@ -269,6 +269,9 @@ class TIMDEXDatasetMetadata:
 
         logger.debug(f"creating table static_db.main.{config.name}")
 
+        # temporarily increase thread count for parallel parquet file scanning
+        conn.execute("SET threads = 64;")
+
         try:
             sql_query = f"""
                 create or replace table {config.name} as (
@@ -287,6 +290,9 @@ class TIMDEXDatasetMetadata:
                 f"(no parquet data at '{data_path}'). Skipping."
             )
             return
+
+        # reset thread count
+        conn.execute(f"""SET threads = {self.timdex_dataset.conn_factory.threads};""")
 
         row_count = conn.query(f"select count(*) from {config.name};").fetchone()[0]  # type: ignore[index]
         logger.info(
