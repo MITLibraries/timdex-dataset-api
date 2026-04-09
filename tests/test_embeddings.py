@@ -12,7 +12,7 @@ from tests.utils import generate_sample_embeddings_for_run, generate_sample_reco
 from timdex_dataset_api import TIMDEXDataset
 from timdex_dataset_api.embeddings import DatasetEmbedding, TIMDEXEmbeddings
 
-EMBEDDINGS_DEFAULT_COLUMNS_SET = set(TIMDEXEmbeddings.DEFAULT_READ_COLUMNS)
+EMBEDDINGS_AVAILABLE_COLUMNS_SET = set(TIMDEXEmbeddings.AVAILABLE_READ_COLUMNS)
 
 
 def test_dataset_embedding_init():
@@ -145,7 +145,7 @@ def test_embeddings_read_batches_yields_pyarrow_record_batches(
 def test_embeddings_read_batches_all_columns_by_default(timdex_embeddings_with_runs):
     batches = timdex_embeddings_with_runs.read_batches_iter()
     batch = next(batches)
-    assert set(batch.column_names) == EMBEDDINGS_DEFAULT_COLUMNS_SET
+    assert set(batch.column_names) == EMBEDDINGS_AVAILABLE_COLUMNS_SET
 
 
 def test_embeddings_read_batches_filter_columns(timdex_embeddings_with_runs):
@@ -273,7 +273,7 @@ def test_embeddings_read_dicts_yields_dictionary_for_each_embeddings_record(
     dict_iter = timdex_embeddings_with_runs.read_dicts_iter()
     record = next(dict_iter)
     assert isinstance(record, dict)
-    assert set(record.keys()) == EMBEDDINGS_DEFAULT_COLUMNS_SET
+    assert set(record.keys()) == EMBEDDINGS_AVAILABLE_COLUMNS_SET
 
 
 def test_current_embeddings_view_single_run(timdex_dataset_for_embeddings_views):

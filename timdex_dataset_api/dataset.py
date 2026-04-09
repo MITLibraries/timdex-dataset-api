@@ -92,18 +92,13 @@ class TIMDEXDataset:
         # create schemas
         self._create_duckdb_schemas()
 
-        source_classes = [TIMDEXRecords, TIMDEXEmbeddings]
+        self.source_classes = [TIMDEXRecords, TIMDEXEmbeddings]
 
-        # define which data types participate in metadata
-        self.data_type_configs = [
-            source_class.METADATA_CONFIG for source_class in source_classes
-        ]
-
-        # define current-row semantics for metadata current_* views
-        self.current_metadata_view_specs = [
-            current_view_spec
-            for source_class in source_classes
-            for current_view_spec in source_class.CURRENT_VIEW_SPECS
+        # define readable metadata-backed tables contributed by data sources
+        self.table_configs = [
+            table_config
+            for source_class in self.source_classes
+            for table_config in source_class.TABLES
         ]
 
         # composed components receive self

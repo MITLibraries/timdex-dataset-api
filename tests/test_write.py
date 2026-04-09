@@ -159,7 +159,7 @@ def test_dataset_write_single_append_delta_success(
 ):
     written_files = timdex_dataset_empty.records.write(sample_records_generator(1_000))
     records_deltas_path = timdex_dataset_empty.metadata.append_deltas_path_for(
-        TIMDEXRecords.METADATA_CONFIG
+        TIMDEXRecords
     )
     append_deltas = os.listdir(records_deltas_path)
 
@@ -175,7 +175,7 @@ def test_dataset_write_multiple_append_deltas_success(
 
     written_files = timdex_dataset_empty.records.write(sample_records_generator(1_000))
     records_deltas_path = timdex_dataset_empty.metadata.append_deltas_path_for(
-        TIMDEXRecords.METADATA_CONFIG
+        TIMDEXRecords
     )
     append_deltas = os.listdir(records_deltas_path)
 
@@ -188,9 +188,9 @@ def test_dataset_write_append_delta_expected_metadata_columns(
 ):
     timdex_dataset_empty.records.write(sample_records_generator(1_000))
     records_deltas_path = timdex_dataset_empty.metadata.append_deltas_path_for(
-        TIMDEXRecords.METADATA_CONFIG
+        TIMDEXRecords
     )
     append_delta_filepath = os.listdir(records_deltas_path)[0]
 
     append_delta = pq.ParquetFile(Path(records_deltas_path) / append_delta_filepath)
-    assert append_delta.schema.names == TIMDEXRecords.METADATA_CONFIG.metadata_columns
+    assert append_delta.schema.names == TIMDEXRecords.SOURCE_METADATA_COLUMNS

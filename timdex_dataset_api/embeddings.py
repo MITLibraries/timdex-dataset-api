@@ -5,8 +5,7 @@ import attrs
 import pyarrow as pa
 from attrs import asdict, define, field
 
-from timdex_dataset_api.data_source import TIMDEXDataSource, ValidTable
-from timdex_dataset_api.metadata import CurrentMetadataViewSpec
+from timdex_dataset_api.data_source import DataSourceTableConfig, TIMDEXDataSource
 from timdex_dataset_api.utils import datetime_iso_parse
 
 
@@ -96,30 +95,6 @@ class TIMDEXEmbeddings(TIMDEXDataSource):
 
     DATA_PATH: ClassVar[str] = "data/embeddings"
 
-    VALID_TABLES: ClassVar[list[ValidTable]] = [
-        ValidTable(
-            name="embeddings",
-            description="All embedding versions across all runs.",
-        ),
-        ValidTable(
-            name="current_embeddings",
-            description=(
-                "One row per (timdex_record_id, embedding_model,"
-                " embedding_strategy) representing the most recent"
-                " embedding for each current record."
-            ),
-        ),
-        ValidTable(
-            name="current_run_embeddings",
-            description=(
-                "One row per (timdex_record_id, run_id, embedding_model,"
-                " embedding_strategy) representing the most recent"
-                " embedding within each run, regardless of whether the"
-                " record is current."
-            ),
-        ),
-    ]
-
     CURRENT_METADATA_VIEW_QUERY: ClassVar[str] = """
         with
             -- CTE of embeddings attached to current record versions only
@@ -159,14 +134,6 @@ class TIMDEXEmbeddings(TIMDEXDataSource):
         where rn = 1
     """
 
-    CURRENT_METADATA_VIEW_SPEC: ClassVar[CurrentMetadataViewSpec] = (
-        CurrentMetadataViewSpec(
-            name="current_embeddings",
-            query_sql=CURRENT_METADATA_VIEW_QUERY,
-            required_metadata_tables=["embeddings", "current_records"],
-        )
-    )
-
     CURRENT_RUN_METADATA_VIEW_QUERY: ClassVar[str] = """
         with
             -- CTE of embeddings ranked by embedding recency within a run and family
@@ -198,15 +165,32 @@ class TIMDEXEmbeddings(TIMDEXDataSource):
         where rn = 1
     """
 
-    CURRENT_RUN_METADATA_VIEW_SPEC: ClassVar[CurrentMetadataViewSpec] = (
-        CurrentMetadataViewSpec(
+    TABLES: ClassVar[list[DataSourceTableConfig]] = [
+        DataSourceTableConfig(
+            name="embeddings",
+            description="All embedding versions across all runs.",
+            kind="base",
+        ),
+        DataSourceTableConfig(
+            name="current_embeddings",
+            description=(
+                "One row per (timdex_record_id, embedding_model, "
+                "embedding_strategy) representing the most recent embedding "
+                "for each current record."
+            ),
+            kind="custom",
+            query_sql=CURRENT_METADATA_VIEW_QUERY,
+            required_metadata_tables=["embeddings", "current_records"],
+        ),
+        DataSourceTableConfig(
             name="current_run_embeddings",
+            description=(
+                "One row per (timdex_record_id, run_id, embedding_model, "
+                "embedding_strategy) representing the most recent embedding "
+                "within each run, regardless of whether the record is current."
+            ),
+            kind="custom",
             query_sql=CURRENT_RUN_METADATA_VIEW_QUERY,
             required_metadata_tables=["embeddings", "records"],
-        )
-    )
-
-    CURRENT_VIEW_SPECS: ClassVar[list[CurrentMetadataViewSpec]] = [
-        CURRENT_METADATA_VIEW_SPEC,
-        CURRENT_RUN_METADATA_VIEW_SPEC,
+        ),
     ]

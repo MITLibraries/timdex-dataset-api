@@ -12,19 +12,15 @@ import time
 import uuid
 from abc import ABC
 from collections.abc import Iterator
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, ClassVar, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol, runtime_checkable
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
 
-from timdex_dataset_api.metadata import (
-    CurrentMetadataViewSpec,
-    DataTypeMetadataConfig,
-    TIMDEXDatasetMetadata,
-)
+from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 if TYPE_CHECKING:
     from timdex_dataset_api.dataset import TIMDEXDataset
@@ -33,14 +29,26 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class ValidTable:
-    """A table or view that a data source exposes for reading."""
+class DataSourceTableConfig:
+    """Unified definition of a readable metadata-backed table or view."""
 
+    # DuckDB table or view name, e.g. 'current_records'.
     name: str
-    """DuckDB table or view name, e.g. 'current_records'."""
 
+    # Human-readable explanation of what this table contains.
     description: str
-    """Human-readable explanation of what this table contains."""
+
+    # Whether this is a base source table or a custom metadata view.
+    kind: Literal["base", "custom"]
+
+    # DuckDB SQL to define custom projection
+    query_sql: str | None = None
+
+    # List of metadata schema tables this relies on
+    required_metadata_tables: list[str] = field(default_factory=list)
+
+    # Deprecated: to be removed
+    preload_setting_attribute: str | None = None
 
 
 @runtime_checkable
@@ -74,8 +82,8 @@ class TIMDEXDataSource(ABC):
     # Heavy/data columns read from parquet data files
     DATA_COLUMNS: ClassVar[list[str]]
 
-    # Tables and views this data source exposes for reading
-    VALID_TABLES: ClassVar[list[ValidTable]]
+    # Tables this data source exposes for reading.
+    TABLES: ClassVar[list[DataSourceTableConfig]] = []
 
     # ------------------------------------------------------------------ #
     # Optional sub-class class vars
@@ -87,9 +95,6 @@ class TIMDEXDataSource(ABC):
         "month",
         "day",
     ]
-
-    # Current-metadata view specs owned by this data source
-    CURRENT_VIEW_SPECS: ClassVar[list[CurrentMetadataViewSpec]] = []
 
     # Composite key columns used when joining metadata to parquet data.
     # filename is always included to physically disambiguate rows that share
@@ -108,53 +113,55 @@ class TIMDEXDataSource(ABC):
     # ------------------------------------------------------------------ #
     # Derived class vars
     # ------------------------------------------------------------------ #
-    METADATA_CONFIG: ClassVar[DataTypeMetadataConfig]
-    ADDITIONAL_METADATA_COLUMNS: ClassVar[list[str]]
-    DEFAULT_READ_COLUMNS: ClassVar[list[str]]
-    VALID_READ_COLUMNS: ClassVar[set[str]]
+    METADATA_COLUMNS: ClassVar[list[str]]
+    SOURCE_METADATA_COLUMNS: ClassVar[list[str]]
+    AVAILABLE_READ_COLUMNS: ClassVar[list[str]]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
-        """Instantiate DataSource subclasses."""
+        """Build dynamic class variables for class."""
         super().__init_subclass__(**kwargs)
 
-        # skip derivation for classes that haven't yet declared required contract vars
+        # validate that child class satisfies TIMDEXDataSource requirements
         required_class_vars = [
             "NAME",
             "SCHEMA",
             "PARTITION_COLUMNS",
             "DATA_COLUMNS",
             "DATA_PATH",
-            "VALID_TABLES",
+            "TABLES",
         ]
-        if not all(hasattr(cls, var_name) for var_name in required_class_vars):
-            return
+        missing_class_vars = [
+            var_name for var_name in required_class_vars if not hasattr(cls, var_name)
+        ]
+        if missing_class_vars:
+            missing = ", ".join(missing_class_vars)
+            raise TypeError(f"{cls.__name__} must define required class vars: {missing}")
 
-        cls.ADDITIONAL_METADATA_COLUMNS = cls.derive_additional_metadata_columns(
-            cls.SCHEMA.names,
-            cls.DATA_COLUMNS,
-            TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS,
-            cls.PARTITION_COLUMNS,
+        schema_metadata_columns = [
+            column_name
+            for column_name in cls.SCHEMA.names
+            if column_name not in cls.DATA_COLUMNS
+            and column_name not in cls.PARTITION_COLUMNS
+        ]
+
+        cls.METADATA_COLUMNS = list(
+            dict.fromkeys(
+                TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS + schema_metadata_columns
+            )
         )
 
-        cls.DEFAULT_READ_COLUMNS = (
-            TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS
-            + cls.ADDITIONAL_METADATA_COLUMNS
-            + cls.DATA_COLUMNS
+        cls.AVAILABLE_READ_COLUMNS = list(
+            dict.fromkeys(cls.METADATA_COLUMNS + cls.DATA_COLUMNS)
         )
 
-        cls.VALID_READ_COLUMNS = set(cls.DEFAULT_READ_COLUMNS)
-
-        cls.METADATA_CONFIG = DataTypeMetadataConfig(
-            name=cls.NAME,
-            metadata_columns=cls.derive_metadata_columns(
-                base_metadata_columns=TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS,
-                additional_metadata_columns=cls.ADDITIONAL_METADATA_COLUMNS,
-                prejoin_records_columns=TIMDEXDatasetMetadata.PREJOIN_RECORDS_COLUMNS,
-                prejoin_records=cls.PREJOIN_RECORDS,
-            ),
-            data_path=cls.DATA_PATH,
-            prejoin_records=cls.PREJOIN_RECORDS,
-        )
+        if cls.PREJOIN_RECORDS:
+            cls.SOURCE_METADATA_COLUMNS = [
+                column_name
+                for column_name in cls.METADATA_COLUMNS
+                if column_name not in TIMDEXDatasetMetadata.PREJOIN_RECORDS_COLUMNS
+            ]
+        else:
+            cls.SOURCE_METADATA_COLUMNS = cls.METADATA_COLUMNS
 
     def __init__(self, timdex_dataset: "TIMDEXDataset") -> None:
         """Instance instantiation; runs after sub-class instantiation."""
@@ -166,56 +173,12 @@ class TIMDEXDataSource(ABC):
     @property
     def data_root(self) -> str:
         """Root path for this source's parquet data."""
-        return (
-            f"{self.timdex_dataset.location.removesuffix('/')}"
-            f"/{self.METADATA_CONFIG.data_path}"
-        )
+        return f"{self.timdex_dataset.location.removesuffix('/')}/{self.DATA_PATH}"
 
     @property
     def default_table(self) -> str:
         """Default table name for read methods."""
         return self.NAME
-
-    @staticmethod
-    def derive_additional_metadata_columns(
-        schema_names: list[str],
-        data_columns: list[str],
-        base_metadata_columns: list[str],
-        partition_columns: list[str],
-    ) -> list[str]:
-        """Return additional metadata columns for a data source read contract.
-
-        Derives columns from a physical parquet schema by excluding:
-        - payload/data columns
-        - shared/base metadata columns
-        - partition helper columns
-        """
-        return [
-            column_name
-            for column_name in schema_names
-            if column_name not in data_columns
-            and column_name not in base_metadata_columns
-            and column_name not in partition_columns
-        ]
-
-    @staticmethod
-    def derive_metadata_columns(
-        base_metadata_columns: list[str],
-        additional_metadata_columns: list[str],
-        prejoin_records_columns: list[str],
-        *,
-        prejoin_records: bool,
-    ) -> list[str]:
-        """Return metadata columns stored in static/delta metadata tables."""
-        if not prejoin_records:
-            return base_metadata_columns + additional_metadata_columns
-
-        key_columns = [
-            column_name
-            for column_name in base_metadata_columns
-            if column_name not in prejoin_records_columns and column_name != "filename"
-        ]
-        return key_columns + additional_metadata_columns + ["filename"]
 
     def create_data_structure(self) -> None:
         """Ensure source data root exists (idempotent for local datasets)."""
@@ -274,7 +237,7 @@ class TIMDEXDataSource(ABC):
             for written_file in written_files:
                 self.timdex_dataset.metadata.write_append_delta(
                     written_file.path,  # type: ignore[attr-defined]
-                    self.METADATA_CONFIG,
+                    type(self),
                 )
             self.timdex_dataset.refresh()
 
@@ -331,7 +294,7 @@ class TIMDEXDataSource(ABC):
 
         Args:
             table: DuckDB table/view name (defaults to ``self.default_table``)
-            columns: columns to return (defaults to ``DEFAULT_READ_COLUMNS``)
+            columns: columns to return (defaults to ``AVAILABLE_READ_COLUMNS``)
             limit: max rows to yield
             where: raw SQL WHERE predicate
             **filters: key/value filter pairs
@@ -339,10 +302,11 @@ class TIMDEXDataSource(ABC):
         start_time = time.perf_counter()
         table = table or self.default_table
 
-        valid_table_names = {vt.name for vt in self.VALID_TABLES}
+        valid_table_names = {table_config.name for table_config in self.TABLES}
         if table not in valid_table_names:
             valid = ", ".join(
-                f"'{vt.name}' ({vt.description})" for vt in self.VALID_TABLES
+                f"'{table_config.name}' ({table_config.description})"
+                for table_config in self.TABLES
             )
             raise ValueError(f"Invalid table: '{table}'. Valid tables: {valid}")
 
@@ -455,12 +419,10 @@ class TIMDEXDataSource(ABC):
         registered_metadata_chunk: str = "meta_chunk",
     ) -> str:
         """Build SQL query for data retrieval, joining metadata chunk to parquet."""
-        metadata_columns = (
-            TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS + self.ADDITIONAL_METADATA_COLUMNS
-        )
+        metadata_columns = self.METADATA_COLUMNS
 
-        requested_columns = columns or self.DEFAULT_READ_COLUMNS
-        invalid_columns = set(requested_columns) - self.VALID_READ_COLUMNS
+        requested_columns = columns or self.AVAILABLE_READ_COLUMNS
+        invalid_columns = set(requested_columns) - set(self.AVAILABLE_READ_COLUMNS)
         if invalid_columns:
             invalid = ", ".join(sorted(invalid_columns))
             raise ValueError(f"Invalid column: {invalid}")

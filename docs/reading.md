@@ -169,10 +169,8 @@ current_df = td.records.read_dataframe(
 ## DuckDB context
 
 - `TIMDEXDataset` exposes a DuckDB connection used for metadata and data queries against Parquet.
-- `TIMDEXDatasetMetadata` manages the metadata structures and provides views such as:
-  - `metadata.records`: all record versions with run metadata
-  - `metadata.current_records`: latest record per `timdex_record_id`
-  - `metadata.append_deltas`: incremental write tracking
+- `TIMDEXDataSource` provides a base class that data sources extend
+  - each data source class defines "tables" that are available for that source in the `metadata` schema
 
 You can execute raw DuckDB SQL for inspection and debugging:
 

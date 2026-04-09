@@ -8,7 +8,7 @@ from duckdb import ParserException
 
 from timdex_dataset_api.records import TIMDEXRecords
 
-DATASET_COLUMNS_SET = set(TIMDEXRecords.DEFAULT_READ_COLUMNS)
+DATASET_COLUMNS_SET = set(TIMDEXRecords.AVAILABLE_READ_COLUMNS)
 
 
 def _count_rows_via_duckdb_parquet(timdex_dataset) -> int:

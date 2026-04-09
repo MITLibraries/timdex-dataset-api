@@ -4,12 +4,14 @@ import glob
 import os
 from pathlib import Path
 
+import pytest
 from duckdb import DuckDBPyConnection
 
 from tests.utils import generate_sample_embeddings_for_run, generate_sample_records
 from timdex_dataset_api import TIMDEXDataset
+from timdex_dataset_api.data_source import TIMDEXDataSource
 from timdex_dataset_api.embeddings import TIMDEXEmbeddings
-from timdex_dataset_api.metadata import DataTypeMetadataConfig, TIMDEXDatasetMetadata
+from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 from timdex_dataset_api.records import TIMDEXRecords
 
 
@@ -33,46 +35,53 @@ def test_tdm_s3_dataset_structure_properties(timdex_dataset_empty):
     assert timdex_dataset_empty.location_scheme == "file"
 
 
-def test_data_type_metadata_config_prejoin_records_default_true():
-    config = DataTypeMetadataConfig(
-        name="example",
-        metadata_columns=["timdex_record_id"],
-        data_path="data/example",
-    )
-    assert config.prejoin_records is True
-
-
-def test_data_source_metadata_configs_are_derived_from_base_class():
-    assert TIMDEXRecords.METADATA_CONFIG.name == TIMDEXRecords.NAME
-    assert TIMDEXRecords.METADATA_CONFIG.data_path == TIMDEXRecords.DATA_PATH
-    assert TIMDEXRecords.METADATA_CONFIG.prejoin_records is False
+def test_data_source_metadata_columns_are_derived_from_base_class():
     assert (
-        TIMDEXRecords.METADATA_CONFIG.metadata_columns
+        TIMDEXRecords.SOURCE_METADATA_COLUMNS
         == TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS
     )
+    assert TIMDEXRecords.METADATA_COLUMNS == TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS
 
-    assert TIMDEXEmbeddings.METADATA_CONFIG.name == TIMDEXEmbeddings.NAME
-    assert TIMDEXEmbeddings.METADATA_CONFIG.data_path == TIMDEXEmbeddings.DATA_PATH
-    assert TIMDEXEmbeddings.METADATA_CONFIG.prejoin_records is True
-    assert TIMDEXEmbeddings.METADATA_CONFIG.metadata_columns == [
+    assert TIMDEXEmbeddings.SOURCE_METADATA_COLUMNS == [
         "timdex_record_id",
         "run_id",
         "run_record_offset",
-        *TIMDEXEmbeddings.ADDITIONAL_METADATA_COLUMNS,
         "filename",
+        "embedding_timestamp",
+        "embedding_model",
+        "embedding_strategy",
     ]
+    assert [
+        *TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS,
+        "embedding_timestamp",
+        "embedding_model",
+        "embedding_strategy",
+    ] == TIMDEXEmbeddings.METADATA_COLUMNS
 
 
-def test_dataset_registers_current_view_specs_from_data_sources(tmp_path):
-    td = TIMDEXDataset(str(tmp_path / "register_current_view_specs"))
+def test_data_source_subclass_requires_contract_vars():
+    with pytest.raises(
+        TypeError,
+        match=(
+            "InvalidDataSource must define required class vars: "
+            "SCHEMA, DATA_COLUMNS, DATA_PATH"
+        ),
+    ):
 
-    expected_view_names = [
-        spec.name
-        for spec in (
-            TIMDEXRecords.CURRENT_VIEW_SPECS + TIMDEXEmbeddings.CURRENT_VIEW_SPECS
-        )
+        class InvalidDataSource(TIMDEXDataSource):
+            NAME = "invalid"
+
+
+def test_dataset_registers_table_configs_from_data_sources(tmp_path):
+    td = TIMDEXDataset(str(tmp_path / "register_table_configs"))
+
+    expected_table_names = [
+        table_config.name
+        for table_config in (TIMDEXRecords.TABLES + TIMDEXEmbeddings.TABLES)
     ]
-    assert [spec.name for spec in td.current_metadata_view_specs] == expected_view_names
+    assert [
+        table_config.name for table_config in td.table_configs
+    ] == expected_table_names
 
 
 def test_tdm_create_metadata_database_file_success(
@@ -136,9 +145,7 @@ def test_tdm_views_created_on_init(timdex_metadata):
     assert expected_views <= actual_views
 
 
-def test_tdm_current_view_specs_missing_dependencies_are_skipped_generically(
-    caplog, tmp_path
-):
+def test_tdm_custom_tables_missing_dependencies_are_skipped_generically(caplog, tmp_path):
     dataset_path = str(tmp_path / "current_view_missing_dependencies")
 
     td = TIMDEXDataset(dataset_path)
@@ -166,25 +173,28 @@ def test_tdm_current_view_specs_missing_dependencies_are_skipped_generically(
     """).to_df()
     metadata_names = set(metadata_objects.table_name)
 
-    missing_specs = []
-    for spec in td_with_metadata.current_metadata_view_specs:
+    missing_tables = []
+    for table_config in td_with_metadata.table_configs:
+        if table_config.kind != "custom":
+            continue
+
         missing_required_tables = [
             table_name
-            for table_name in spec.required_metadata_tables
+            for table_name in table_config.required_metadata_tables
             if table_name not in metadata_names
         ]
         if not missing_required_tables:
             continue
 
-        missing_specs.append(spec.name)
-        assert spec.name not in metadata_names
+        missing_tables.append(table_config.name)
+        assert table_config.name not in metadata_names
         assert (
             "Skipping metadata."
-            f"{spec.name} view creation because missing dependencies: "
+            f"{table_config.name} view creation because missing dependencies: "
             f"{', '.join(missing_required_tables)}"
         ) in caplog.text
 
-    assert missing_specs
+    assert missing_tables
 
 
 def test_tdm_records_view_structure(timdex_metadata):
@@ -374,7 +384,7 @@ def test_tdm_merge_append_deltas_static_counts_match_records_count_before_merge(
 def test_tdm_merge_append_deltas_adds_records_to_static_db(
     timdex_metadata_with_deltas, timdex_metadata_merged_deltas
 ):
-    columns = ",".join(TIMDEXRecords.METADATA_CONFIG.metadata_columns)
+    columns = ",".join(TIMDEXRecords.SOURCE_METADATA_COLUMNS)
     append_deltas = timdex_metadata_with_deltas.timdex_dataset.conn.query(f"""
             select
             {columns}
@@ -396,10 +406,10 @@ def test_tdm_merge_append_deltas_deletes_append_deltas(
     timdex_metadata_with_deltas, timdex_metadata_merged_deltas
 ):
     records_deltas_path_before = timdex_metadata_with_deltas.append_deltas_path_for(
-        TIMDEXRecords.METADATA_CONFIG
+        TIMDEXRecords
     )
     records_deltas_path_after = timdex_metadata_merged_deltas.append_deltas_path_for(
-        TIMDEXRecords.METADATA_CONFIG
+        TIMDEXRecords
     )
 
     assert timdex_metadata_with_deltas.append_deltas_count != 0
@@ -436,14 +446,7 @@ def test_tdm_embeddings_metadata_view_structure(tmp_path):
         """select * from metadata.embeddings limit 1;"""
     ).to_df()
     assert len(embeddings_df) == 1
-    # pre-joined view includes native embeddings columns + records columns
-    expected_columns = set(TIMDEXEmbeddings.METADATA_CONFIG.metadata_columns) | {
-        "source",
-        "run_date",
-        "run_type",
-        "action",
-        "run_timestamp",
-    }
+    expected_columns = set(TIMDEXEmbeddings.METADATA_COLUMNS)
     assert set(embeddings_df.columns) == expected_columns
 
 
@@ -475,14 +478,7 @@ def test_tdm_current_embeddings_view_structure(tmp_path):
     ).to_df()
 
     assert len(current_embeddings_df) == 1
-    # pre-joined view includes native embeddings columns + records columns
-    expected_columns = set(TIMDEXEmbeddings.METADATA_CONFIG.metadata_columns) | {
-        "source",
-        "run_date",
-        "run_type",
-        "action",
-        "run_timestamp",
-    }
+    expected_columns = set(TIMDEXEmbeddings.METADATA_COLUMNS)
     assert set(current_embeddings_df.columns) == expected_columns
 
 
@@ -590,14 +586,7 @@ def test_tdm_current_run_embeddings_view_structure(tmp_path):
     ).to_df()
 
     assert len(current_run_embeddings_df) == 1
-    # pre-joined view includes native embeddings columns + records columns
-    expected_columns = set(TIMDEXEmbeddings.METADATA_CONFIG.metadata_columns) | {
-        "source",
-        "run_date",
-        "run_type",
-        "action",
-        "run_timestamp",
-    }
+    expected_columns = set(TIMDEXEmbeddings.METADATA_COLUMNS)
     assert set(current_run_embeddings_df.columns) == expected_columns
 
 
@@ -747,11 +736,7 @@ def test_tdm_keyset_paginated_query_on_prejoined_embeddings_view(tmp_path):
     # execute and verify results
     result_df = td.conn.query(query).to_df()
     assert len(result_df) == 10  # noqa: PLR2004
-    expected_cols = set(
-        TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS
-        + TIMDEXEmbeddings.ADDITIONAL_METADATA_COLUMNS
-        + ["run_id_hash", "filename_hash"]
-    )
+    expected_cols = {*TIMDEXEmbeddings.METADATA_COLUMNS, "run_id_hash", "filename_hash"}
     assert set(result_df.columns) == expected_cols
 
 
@@ -783,9 +768,7 @@ def test_tdm_embeddings_write_append_deltas_without_static_embeddings_table(tmp_
         """select count(*) from metadata.embeddings_append_deltas;"""
     ).fetchone()[0]
 
-    embeddings_deltas_path = td.metadata.append_deltas_path_for(
-        TIMDEXEmbeddings.METADATA_CONFIG
-    )
+    embeddings_deltas_path = td.metadata.append_deltas_path_for(TIMDEXEmbeddings)
     assert embeddings_count == record_count
     assert embeddings_deltas_count == record_count
     assert os.listdir(embeddings_deltas_path)

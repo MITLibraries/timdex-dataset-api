@@ -9,8 +9,7 @@ import attrs
 import pyarrow as pa
 from attrs import asdict, define, field
 
-from timdex_dataset_api.data_source import TIMDEXDataSource, ValidTable
-from timdex_dataset_api.metadata import CurrentMetadataViewSpec
+from timdex_dataset_api.data_source import DataSourceTableConfig, TIMDEXDataSource
 from timdex_dataset_api.utils import (
     datetime_iso_parse,
     strict_date_parse,
@@ -110,21 +109,6 @@ class TIMDEXRecords(TIMDEXDataSource):
 
     PREJOIN_RECORDS: ClassVar[bool] = False
 
-    VALID_TABLES: ClassVar[list[ValidTable]] = [
-        ValidTable(
-            name="records",
-            description="All record versions across all runs.",
-        ),
-        ValidTable(
-            name="current_records",
-            description=(
-                "One row per (source, timdex_record_id) representing the"
-                " most recent version of each record since the last full"
-                " run."
-            ),
-        ),
-    ]
-
     CURRENT_METADATA_VIEW_QUERY: ClassVar[str] = """
         with
             -- CTE of run_timestamp for last source full run
@@ -167,17 +151,23 @@ class TIMDEXRecords(TIMDEXDataSource):
         where rn = 1
     """
 
-    CURRENT_METADATA_VIEW_SPEC: ClassVar[CurrentMetadataViewSpec] = (
-        CurrentMetadataViewSpec(
+    TABLES: ClassVar[list[DataSourceTableConfig]] = [
+        DataSourceTableConfig(
+            name="records",
+            description="All record versions across all runs.",
+            kind="base",
+        ),
+        DataSourceTableConfig(
             name="current_records",
+            description=(
+                "One row per (source, timdex_record_id) representing the "
+                "most recent version of each record since the last full run."
+            ),
+            kind="custom",
             query_sql=CURRENT_METADATA_VIEW_QUERY,
             required_metadata_tables=["records"],
             preload_setting_attribute="preload_current_records",
-        )
-    )
-
-    CURRENT_VIEW_SPECS: ClassVar[list[CurrentMetadataViewSpec]] = [
-        CURRENT_METADATA_VIEW_SPEC
+        ),
     ]
 
     def read_transformed_records_iter(
