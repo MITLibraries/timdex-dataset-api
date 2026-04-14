@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any, ClassVar, Unpack, cast
 from duckdb import BinderException as DuckDBBinderException
 from duckdb import CatalogException as DuckDBCatalogException
 from duckdb import DuckDBPyConnection
+from duckdb import HTTPException as DuckDBHTTPException
 from duckdb import IOException as DuckDBIOException
 from duckdb_engine import Dialect as DuckDBDialect
 from sqlalchemy import func, literal, select, text, tuple_
@@ -256,18 +257,35 @@ class TIMDEXDatasetMetadata:
         """Set up metadata schema views in the DuckDB connection.
 
         Creates views for accessing static metadata DB and append deltas.
-        If static DB doesn't exist, logs warning but doesn't fail.
+        If the static DB does not exist yet, bootstrap metadata views from append
+        deltas when available.
         """
         start_time = time.perf_counter()
 
-        if not self.database_exists():
-            logger.warning(
-                f"Static metadata database not found @ '{self.metadata_database_path}'. "
-                "Consider rebuild via TIMDEXDataset.metadata.rebuild_dataset_metadata()."
-            )
-            return
-
-        self._attach_database_file(self.timdex_dataset.conn)
+        if self.database_exists():
+            self._attach_database_file(self.timdex_dataset.conn)
+        else:
+            bootstrap_sources = [
+                source_class.NAME
+                for source_class in self.source_classes
+                if self._append_delta_count(self.timdex_dataset.conn, source_class) > 0
+            ]
+            if bootstrap_sources:
+                logger.warning(
+                    "Static metadata database not found @ "
+                    f"'{self.metadata_database_path}'. "
+                    "Bootstrapping metadata views from append deltas for: "
+                    f"{', '.join(bootstrap_sources)}. "
+                    "Consider rebuild via "
+                    "TIMDEXDataset.metadata.rebuild_dataset_metadata()."
+                )
+            else:
+                logger.warning(
+                    "Static metadata database not found @ "
+                    f"'{self.metadata_database_path}'. "
+                    "Consider rebuild via "
+                    "TIMDEXDataset.metadata.rebuild_dataset_metadata()."
+                )
 
         for source_class in self.source_classes:
             self._create_append_deltas_view(self.timdex_dataset.conn, source_class)
@@ -313,10 +331,7 @@ class TIMDEXDatasetMetadata:
         logger.debug(f"creating view metadata.{view_name}")
 
         # get current append delta count
-        append_delta_count = conn.execute(f"""
-            select count(*) as file_count
-            from glob('{deltas_path}/*.parquet')
-        """).fetchone()[0]  # type: ignore[index]
+        append_delta_count = self._append_delta_count(conn, source_class)
         logger.debug(
             f"{append_delta_count} append deltas found for '{source_class.NAME}'"
         )
@@ -416,6 +431,13 @@ class TIMDEXDatasetMetadata:
             return
 
         if source_class.PREJOIN_RECORDS:
+            if not self._metadata_table_exists(conn, "records"):
+                logger.warning(
+                    f"Skipping metadata.{view_name} view creation because missing "
+                    "dependency: records"
+                )
+                return
+
             prejoin_cols = ",".join(f"r.{c}" for c in self.PREJOIN_RECORDS_COLUMNS)
             join_keys = "timdex_record_id, run_id, run_record_offset"
             conn.execute(f"""
@@ -501,6 +523,27 @@ class TIMDEXDatasetMetadata:
         return bool(
             getattr(self.timdex_dataset, table_config.preload_setting_attribute, False)
         )
+
+    def _append_delta_count(
+        self, conn: DuckDBPyConnection, source_class: type["TIMDEXDataSource"]
+    ) -> int:
+        """Return append delta parquet file count for a single data source."""
+        deltas_glob = f"{self.append_deltas_path_for(source_class)}/*.parquet"
+
+        try:
+            return cast(
+                "int",
+                conn.execute(f"""
+                    select count(*) as file_count
+                    from glob('{deltas_glob}')
+                """).fetchone()[0],  # type: ignore[index]
+            )
+        except (DuckDBHTTPException, DuckDBIOException):
+            logger.debug(
+                "Could not inspect append deltas for "
+                f"'{source_class.NAME}' at '{deltas_glob}'; assuming none exist."
+            )
+            return 0
 
     def _metadata_table_exists(self, conn: DuckDBPyConnection, table_name: str) -> bool:
         """Return True if a metadata schema table or view exists by name."""

@@ -740,6 +740,45 @@ def test_tdm_keyset_paginated_query_on_prejoined_embeddings_view(tmp_path):
     assert set(result_df.columns) == expected_cols
 
 
+def test_tdm_records_bootstrap_from_append_deltas_without_static_db(tmp_path):
+    record_count = 20
+    td = TIMDEXDataset(str(tmp_path / "records_append_deltas_bootstrap"))
+
+    td.records.write(
+        generate_sample_records(
+            num_records=record_count,
+            source="alma",
+            run_date="2025-03-01",
+            run_type="full",
+            run_id="records-bootstrap-run",
+        )
+    )
+
+    assert td.metadata.database_exists() is False
+    assert len(td.records.read_dataframe()) == record_count
+    assert len(td.records.read_dataframe(table="current_records")) == record_count
+
+
+def test_tdm_embeddings_bootstrap_from_append_deltas_without_static_db(tmp_path):
+    record_count = 20
+    td = TIMDEXDataset(str(tmp_path / "embeddings_append_deltas_bootstrap"))
+
+    td.records.write(
+        generate_sample_records(
+            num_records=record_count,
+            source="alma",
+            run_date="2025-03-02",
+            run_type="full",
+            run_id="emb-delta-run",
+        )
+    )
+    td.embeddings.write(generate_sample_embeddings_for_run(td, run_id="emb-delta-run"))
+
+    assert td.metadata.database_exists() is False
+    assert len(td.embeddings.read_dataframe()) == record_count
+    assert len(td.embeddings.read_dataframe(table="current_embeddings")) == record_count
+
+
 def test_tdm_embeddings_write_append_deltas_without_static_embeddings_table(tmp_path):
     record_count = 20
     td = TIMDEXDataset(str(tmp_path / "embeddings_append_deltas_only"))
