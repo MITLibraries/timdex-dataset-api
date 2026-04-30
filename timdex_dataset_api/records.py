@@ -9,7 +9,7 @@ import attrs
 import pyarrow as pa
 from attrs import asdict, define, field
 
-from timdex_dataset_api.data_source import DataSourceTableConfig, TIMDEXDataSource
+from timdex_dataset_api.data_type import DataTypeTableConfig, TIMDEXDataType
 from timdex_dataset_api.utils import (
     datetime_iso_parse,
     strict_date_parse,
@@ -77,7 +77,7 @@ class DatasetRecord:
         }
 
 
-class TIMDEXRecords(TIMDEXDataSource):
+class TIMDEXRecords(TIMDEXDataType):
     """Class to handle records in the TIMDEXDataset."""
 
     NAME: ClassVar[str] = "records"
@@ -151,13 +151,13 @@ class TIMDEXRecords(TIMDEXDataSource):
         where rn = 1
     """
 
-    TABLES: ClassVar[list[DataSourceTableConfig]] = [
-        DataSourceTableConfig(
+    TABLES: ClassVar[list[DataTypeTableConfig]] = [
+        DataTypeTableConfig(
             name="records",
             description="All record versions across all runs.",
             kind="base",
         ),
-        DataSourceTableConfig(
+        DataTypeTableConfig(
             name="current_records",
             description=(
                 "One row per (source, timdex_record_id) representing the "

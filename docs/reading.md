@@ -1,9 +1,9 @@
 # Reading data from TIMDEXDataset
 
-This guide explains how TIMDEXDataset data source read methods work and how to use them effectively.
+This guide explains how read methods for TIMDEXDataset data types work and how to use them effectively.
 
 - `TIMDEXDataset` maintains an in-memory DuckDB context. You can issue DuckDB SQL against the views/tables they create.
-- Source-specific read methods are exposed on `timdex_dataset.records` and `timdex_dataset.embeddings`.
+- Read methods for each data type are exposed on `timdex_dataset.records` and `timdex_dataset.embeddings`.
 - Read methods use a two-step query flow for performance:
   1) a metadata query determines which Parquet files and row offsets are relevant
   2) a data query reads just those rows and returns the requested columns
@@ -169,8 +169,8 @@ current_df = td.records.read_dataframe(
 ## DuckDB context
 
 - `TIMDEXDataset` exposes a DuckDB connection used for metadata and data queries against Parquet.
-- `TIMDEXDataSource` provides a base class that data sources extend
-  - each data source class defines "tables" that are available for that source in the `metadata` schema
+- `TIMDEXDataType` provides a base class that data types extend
+  - each data type class defines "tables" that are available for that data type in the `metadata` schema
 
 You can execute raw DuckDB SQL for inspection and debugging:
 

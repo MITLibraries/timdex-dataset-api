@@ -131,7 +131,7 @@ def test_dataset_write_partition_ignore_existing_data(
     assert _count_rows_via_duckdb_parquet(timdex_dataset_empty) == 20
 
 
-@patch("timdex_dataset_api.data_source.uuid.uuid4")
+@patch("timdex_dataset_api.data_type.uuid.uuid4")
 def test_dataset_write_partition_overwrite_files_with_same_name(
     mock_uuid, timdex_dataset_empty, sample_records_generator
 ):
@@ -193,4 +193,4 @@ def test_dataset_write_append_delta_expected_metadata_columns(
     append_delta_filepath = os.listdir(records_deltas_path)[0]
 
     append_delta = pq.ParquetFile(Path(records_deltas_path) / append_delta_filepath)
-    assert append_delta.schema.names == TIMDEXRecords.SOURCE_METADATA_COLUMNS
+    assert append_delta.schema.names == TIMDEXRecords.DATATYPE_METADATA_COLUMNS

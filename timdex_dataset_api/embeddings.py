@@ -5,7 +5,7 @@ import attrs
 import pyarrow as pa
 from attrs import asdict, define, field
 
-from timdex_dataset_api.data_source import DataSourceTableConfig, TIMDEXDataSource
+from timdex_dataset_api.data_type import DataTypeTableConfig, TIMDEXDataType
 from timdex_dataset_api.utils import datetime_iso_parse
 
 
@@ -67,7 +67,7 @@ class DatasetEmbedding:
         }
 
 
-class TIMDEXEmbeddings(TIMDEXDataSource):
+class TIMDEXEmbeddings(TIMDEXDataType):
     """Class to handle record embeddings in the TIMDEXDataset."""
 
     NAME: ClassVar[str] = "embeddings"
@@ -165,13 +165,13 @@ class TIMDEXEmbeddings(TIMDEXDataSource):
         where rn = 1
     """
 
-    TABLES: ClassVar[list[DataSourceTableConfig]] = [
-        DataSourceTableConfig(
+    TABLES: ClassVar[list[DataTypeTableConfig]] = [
+        DataTypeTableConfig(
             name="embeddings",
             description="All embedding versions across all runs.",
             kind="base",
         ),
-        DataSourceTableConfig(
+        DataTypeTableConfig(
             name="current_embeddings",
             description=(
                 "One row per (timdex_record_id, embedding_model, "
@@ -182,7 +182,7 @@ class TIMDEXEmbeddings(TIMDEXDataSource):
             query_sql=CURRENT_METADATA_VIEW_QUERY,
             required_metadata_tables=["embeddings", "current_records"],
         ),
-        DataSourceTableConfig(
+        DataTypeTableConfig(
             name="current_run_embeddings",
             description=(
                 "One row per (timdex_record_id, run_id, embedding_model, "

@@ -95,7 +95,7 @@ timdex_dataset = TIMDEXDataset("s3://my-bucket/path/to/dataset")
 timdex_dataset = TIMDEXDataset("/path/to/dataset")
 ```
 
-Source-specific operations are available on composed objects such as
+Operations for each data type are available on composed objects such as
 `timdex_dataset.records` and `timdex_dataset.embeddings`.
 
 All read methods for `timdex_dataset.records` allow for the same group of filters.

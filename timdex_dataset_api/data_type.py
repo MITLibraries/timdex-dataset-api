@@ -1,6 +1,6 @@
-"""timdex_dataset_api/data_source.py
+"""timdex_dataset_api/data_type.py
 
-Abstract base class for TIMDEX data sources (records, embeddings, etc.).
+Abstract base class for TIMDEX data types (records, embeddings, etc.).
 
 Shared read/write orchestration lives here; subclasses provide schema definitions,
 column contracts, and domain-specific hooks.
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
-class DataSourceTableConfig:
+class DataTypeTableConfig:
     """Unified definition of a readable metadata-backed table or view."""
 
     # DuckDB table or view name, e.g. 'current_records'.
@@ -38,7 +38,7 @@ class DataSourceTableConfig:
     # Human-readable explanation of what this table contains.
     description: str
 
-    # Whether this is a base source table or a custom metadata view.
+    # Whether this is a base data type table or a custom metadata view.
     kind: Literal["base", "custom"]
 
     # DuckDB SQL to define custom projection
@@ -52,14 +52,14 @@ class DataSourceTableConfig:
 
 
 @runtime_checkable
-class DataSourceRow(Protocol):
-    """Protocol for row objects that can be written to a data source."""
+class DataTypeRow(Protocol):
+    """Protocol for row objects that can be written to a data type."""
 
     def to_dict(self) -> dict: ...
 
 
-class TIMDEXDataSource(ABC):
-    """Abstract base class for TIMDEX data sources.
+class TIMDEXDataType(ABC):
+    """Abstract base class for TIMDEX data types.
 
     Provides shared write, read, and column-contract logic.  Subclasses must
     define their schema and column contract class variables; metadata
@@ -73,7 +73,7 @@ class TIMDEXDataSource(ABC):
     # Short identifier, e.g. "records", "embeddings", etc.
     NAME: ClassVar[str]
 
-    # Full pyarrow schema for parquet files of this data source
+    # Full pyarrow schema for parquet files of this data type
     SCHEMA: ClassVar[pa.Schema]
 
     # Location of data parquet files, e.g. "data/records"
@@ -82,8 +82,8 @@ class TIMDEXDataSource(ABC):
     # Heavy/data columns read from parquet data files
     DATA_COLUMNS: ClassVar[list[str]]
 
-    # Tables this data source exposes for reading.
-    TABLES: ClassVar[list[DataSourceTableConfig]] = []
+    # Tables this data type exposes for reading.
+    TABLES: ClassVar[list[DataTypeTableConfig]] = []
 
     # ------------------------------------------------------------------ #
     # Optional sub-class class vars
@@ -99,7 +99,7 @@ class TIMDEXDataSource(ABC):
     # Composite key columns used when joining metadata to parquet data.
     # filename is always included to physically disambiguate rows that share
     # the same logical key but reside in different parquet files (common for
-    # bolt-on data sources like embeddings).
+    # bolt-on data types like embeddings).
     JOIN_KEYS: ClassVar[list[str]] = [
         "timdex_record_id",
         "run_id",
@@ -114,14 +114,14 @@ class TIMDEXDataSource(ABC):
     # Derived class vars
     # ------------------------------------------------------------------ #
     METADATA_COLUMNS: ClassVar[list[str]]
-    SOURCE_METADATA_COLUMNS: ClassVar[list[str]]
+    DATATYPE_METADATA_COLUMNS: ClassVar[list[str]]
     AVAILABLE_READ_COLUMNS: ClassVar[list[str]]
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         """Build dynamic class variables for class."""
         super().__init_subclass__(**kwargs)
 
-        # validate that child class satisfies TIMDEXDataSource requirements
+        # validate that child class satisfies TIMDEXDataType requirements
         required_class_vars = [
             "NAME",
             "SCHEMA",
@@ -155,13 +155,13 @@ class TIMDEXDataSource(ABC):
         )
 
         if cls.PREJOIN_RECORDS:
-            cls.SOURCE_METADATA_COLUMNS = [
+            cls.DATATYPE_METADATA_COLUMNS = [
                 column_name
                 for column_name in cls.METADATA_COLUMNS
                 if column_name not in TIMDEXDatasetMetadata.PREJOIN_RECORDS_COLUMNS
             ]
         else:
-            cls.SOURCE_METADATA_COLUMNS = cls.METADATA_COLUMNS
+            cls.DATATYPE_METADATA_COLUMNS = cls.METADATA_COLUMNS
 
     def __init__(self, timdex_dataset: "TIMDEXDataset") -> None:
         """Instance instantiation; runs after sub-class instantiation."""
@@ -172,7 +172,7 @@ class TIMDEXDataSource(ABC):
 
     @property
     def data_root(self) -> str:
-        """Root path for this source's parquet data."""
+        """Root path for this data type's parquet data."""
         return f"{self.timdex_dataset.location.removesuffix('/')}/{self.DATA_PATH}"
 
     @property
@@ -181,11 +181,11 @@ class TIMDEXDataSource(ABC):
         return self.NAME
 
     def create_data_structure(self) -> None:
-        """Ensure source data root exists (idempotent for local datasets)."""
+        """Ensure data type data root exists (idempotent for local datasets)."""
         self._ensure_data_root_exists()
 
     def _ensure_data_root_exists(self) -> None:
-        """Ensure local data root directory exists for this source."""
+        """Ensure local data root directory exists for this data type."""
         if self.timdex_dataset.location_scheme != "file":
             return
         Path(self.data_root).mkdir(parents=True, exist_ok=True)
@@ -196,12 +196,12 @@ class TIMDEXDataSource(ABC):
 
     def write(
         self,
-        rows_iter: Iterator[DataSourceRow],
+        rows_iter: Iterator[DataTypeRow],
         *,
         use_threads: bool = True,
         write_append_deltas: bool = True,
     ) -> list[ds.WrittenFile]:
-        """Write rows to this data source's parquet dataset.
+        """Write rows to this data type's parquet dataset.
 
         Args:
             rows_iter: iterator of row objects (DatasetRecord, DatasetEmbedding, etc.)
@@ -247,7 +247,7 @@ class TIMDEXDataSource(ABC):
 
     def _create_batches(
         self,
-        rows_iter: Iterator[DataSourceRow],
+        rows_iter: Iterator[DataTypeRow],
     ) -> Iterator[pa.RecordBatch]:
         """Yield ``pyarrow.RecordBatch`` objects from an iterator of row objects."""
         for i, batch in enumerate(

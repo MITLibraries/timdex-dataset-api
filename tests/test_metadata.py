@@ -9,7 +9,7 @@ from duckdb import DuckDBPyConnection
 
 from tests.utils import generate_sample_embeddings_for_run, generate_sample_records
 from timdex_dataset_api import TIMDEXDataset
-from timdex_dataset_api.data_source import TIMDEXDataSource
+from timdex_dataset_api.data_type import TIMDEXDataType
 from timdex_dataset_api.embeddings import TIMDEXEmbeddings
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 from timdex_dataset_api.records import TIMDEXRecords
@@ -35,14 +35,14 @@ def test_tdm_s3_dataset_structure_properties(timdex_dataset_empty):
     assert timdex_dataset_empty.location_scheme == "file"
 
 
-def test_data_source_metadata_columns_are_derived_from_base_class():
+def test_data_type_metadata_columns_are_derived_from_base_class():
     assert (
-        TIMDEXRecords.SOURCE_METADATA_COLUMNS
+        TIMDEXRecords.DATATYPE_METADATA_COLUMNS
         == TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS
     )
     assert TIMDEXRecords.METADATA_COLUMNS == TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS
 
-    assert TIMDEXEmbeddings.SOURCE_METADATA_COLUMNS == [
+    assert TIMDEXEmbeddings.DATATYPE_METADATA_COLUMNS == [
         "timdex_record_id",
         "run_id",
         "run_record_offset",
@@ -59,20 +59,20 @@ def test_data_source_metadata_columns_are_derived_from_base_class():
     ] == TIMDEXEmbeddings.METADATA_COLUMNS
 
 
-def test_data_source_subclass_requires_contract_vars():
+def test_data_type_subclass_requires_contract_vars():
     with pytest.raises(
         TypeError,
         match=(
-            "InvalidDataSource must define required class vars: "
+            "InvalidDataType must define required class vars: "
             "SCHEMA, DATA_COLUMNS, DATA_PATH"
         ),
     ):
 
-        class InvalidDataSource(TIMDEXDataSource):
+        class InvalidDataType(TIMDEXDataType):
             NAME = "invalid"
 
 
-def test_dataset_registers_table_configs_from_data_sources(tmp_path):
+def test_dataset_registers_table_configs_from_data_types(tmp_path):
     td = TIMDEXDataset(str(tmp_path / "register_table_configs"))
 
     expected_table_names = [
@@ -384,7 +384,7 @@ def test_tdm_merge_append_deltas_static_counts_match_records_count_before_merge(
 def test_tdm_merge_append_deltas_adds_records_to_static_db(
     timdex_metadata_with_deltas, timdex_metadata_merged_deltas
 ):
-    columns = ",".join(TIMDEXRecords.SOURCE_METADATA_COLUMNS)
+    columns = ",".join(TIMDEXRecords.DATATYPE_METADATA_COLUMNS)
     append_deltas = timdex_metadata_with_deltas.timdex_dataset.conn.query(f"""
             select
             {columns}

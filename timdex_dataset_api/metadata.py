@@ -23,7 +23,7 @@ from timdex_dataset_api.utils import (
 )
 
 if TYPE_CHECKING:
-    from timdex_dataset_api.data_source import DataSourceTableConfig, TIMDEXDataSource
+    from timdex_dataset_api.data_type import DataTypeTableConfig, TIMDEXDataType
     from timdex_dataset_api.dataset import TIMDEXDataset
     from timdex_dataset_api.records import RecordsFilters
 
@@ -31,7 +31,7 @@ logger = configure_logger(__name__)
 
 
 class TIMDEXDatasetMetadata:
-    """Class to handle metadata for all data sources in the TIMDEXDataset."""
+    """Class to handle metadata for all data types in the TIMDEXDataset."""
 
     BASE_METADATA_COLUMNS: ClassVar[list[str]] = [
         "timdex_record_id",
@@ -52,7 +52,7 @@ class TIMDEXDatasetMetadata:
             timdex_dataset: parent TIMDEXDataset instance
         """
         self.timdex_dataset = timdex_dataset
-        self.source_classes = timdex_dataset.source_classes
+        self.data_type_classes = timdex_dataset.data_type_classes
         self.table_configs = timdex_dataset.table_configs
 
         self.create_metadata_structure()
@@ -70,35 +70,37 @@ class TIMDEXDatasetMetadata:
     def metadata_database_path(self) -> str:
         return f"{self.metadata_root}/{self.metadata_database_filename}"
 
-    def append_deltas_path_for(self, source_class: type["TIMDEXDataSource"]) -> str:
-        """Return the append deltas path for a specific data source."""
-        return f"{self.metadata_root}/append_deltas/{source_class.NAME}"
+    def append_deltas_path_for(self, data_type_class: type["TIMDEXDataType"]) -> str:
+        """Return the append deltas path for a specific data type."""
+        return f"{self.metadata_root}/append_deltas/{data_type_class.NAME}"
 
-    def resolve_source_class_for_table(self, table: str) -> type["TIMDEXDataSource"]:
-        """Resolve a metadata table/view name to its owning data source class."""
-        for source_class in self.source_classes:
-            if table == source_class.NAME or table.endswith(f"_{source_class.NAME}"):
-                return source_class
+    def resolve_data_type_class_for_table(self, table: str) -> type["TIMDEXDataType"]:
+        """Resolve a metadata table/view name to its owning data type class."""
+        for data_type_class in self.data_type_classes:
+            if table == data_type_class.NAME or table.endswith(
+                f"_{data_type_class.NAME}"
+            ):
+                return data_type_class
 
-        raise ValueError(f"Could not resolve data source for metadata table '{table}'.")
+        raise ValueError(f"Could not resolve data type for metadata table '{table}'.")
 
-    def data_source_metadata_columns_for(
-        self, source_class: type["TIMDEXDataSource"]
+    def data_type_metadata_columns_for(
+        self, data_type_class: type["TIMDEXDataType"]
     ) -> list[str]:
-        """Return the full metadata column surface for a data source."""
-        return source_class.METADATA_COLUMNS
+        """Return the full metadata column surface for a data type."""
+        return data_type_class.METADATA_COLUMNS
 
     def get_metadata_columns_for_table(self, table: str) -> list[str]:
         """Return canonical metadata columns projected by read keyset queries.
 
-        The returned columns are derived from the owning data source's metadata surface
+        The returned columns are derived from the owning data type's metadata surface
         and filtered to columns actually available on the requested table or view.
         """
         sa_table = self.timdex_dataset.get_sa_table("metadata", table)
         available_columns = set(sa_table.c.keys())
 
-        source_class = self.resolve_source_class_for_table(table)
-        expected_columns = self.data_source_metadata_columns_for(source_class)
+        data_type_class = self.resolve_data_type_class_for_table(table)
+        expected_columns = self.data_type_metadata_columns_for(data_type_class)
 
         projected_columns: list[str] = []
         for column_name in expected_columns:
@@ -124,20 +126,20 @@ class TIMDEXDatasetMetadata:
             select count(*) from metadata.current_records;
             """).fetchone()[0]  # type: ignore[index]
 
-    def append_deltas_count_for(self, source_class: type["TIMDEXDataSource"]) -> int:
-        """Count append deltas rows for a single data source."""
-        view_name = f"{source_class.NAME}_append_deltas"
+    def append_deltas_count_for(self, data_type_class: type["TIMDEXDataType"]) -> int:
+        """Count append deltas rows for a single data type."""
+        view_name = f"{data_type_class.NAME}_append_deltas"
         return self.timdex_dataset.conn.query(f"""
             select count(*) from metadata.{view_name};
         """).fetchone()[0]  # type: ignore[index]
 
     @property
     def append_deltas_count(self) -> int:
-        """Count of append deltas rows across all registered data sources."""
+        """Count of append deltas rows across all registered data types."""
         total = 0
-        for source_class in self.source_classes:
+        for data_type_class in self.data_type_classes:
             try:
-                total += self.append_deltas_count_for(source_class)
+                total += self.append_deltas_count_for(data_type_class)
             except (DuckDBCatalogException, DuckDBBinderException):
                 continue
         return total
@@ -149,8 +151,8 @@ class TIMDEXDatasetMetadata:
                 parents=True,
                 exist_ok=True,
             )
-            for source_class in self.source_classes:
-                Path(self.append_deltas_path_for(source_class)).mkdir(
+            for data_type_class in self.data_type_classes:
+                Path(self.append_deltas_path_for(data_type_class)).mkdir(
                     parents=True,
                     exist_ok=True,
                 )
@@ -171,8 +173,8 @@ class TIMDEXDatasetMetadata:
             - build a local, temporary static metadata database file, then overwrite the
                 canonical version in the dataset (e.g. in S3)
         """
-        for source_class in self.source_classes:
-            deltas_path = self.append_deltas_path_for(source_class)
+        for data_type_class in self.data_type_classes:
+            deltas_path = self.append_deltas_path_for(data_type_class)
             if self.timdex_dataset.location_scheme == "s3":
                 s3_client = S3Client()
                 s3_client.delete_folder(deltas_path)
@@ -203,32 +205,31 @@ class TIMDEXDatasetMetadata:
         self.timdex_dataset.refresh()
 
     def _create_full_dataset_table(self, conn: DuckDBPyConnection) -> None:
-        """Create metadata tables for all data sources in the static database.
+        """Create metadata tables for all data types in the static database.
 
-        Iterates over registered data source classes and creates one table per source.
-        Gracefully skips data sources whose parquet data does not yet exist.
+        Iterates over registered data type classes and creates one table per data type.
+        Gracefully skips data types whose parquet data does not yet exist.
         """
-        for source_class in self.source_classes:
-            self._create_metadata_table(conn, source_class)
+        for data_type_class in self.data_type_classes:
+            self._create_metadata_table(conn, data_type_class)
 
     def _create_metadata_table(
-        self, conn: DuckDBPyConnection, source_class: type["TIMDEXDataSource"]
+        self, conn: DuckDBPyConnection, data_type_class: type["TIMDEXDataType"]
     ) -> None:
-        """Create a metadata table for a single data source in the static database."""
+        """Create a metadata table for a single data type in the static database."""
         start_time = time.perf_counter()
-        data_path = (
-            f"{self.timdex_dataset.location.removesuffix('/')}/{source_class.DATA_PATH}"
-        )
+        dataset_location = self.timdex_dataset.location.removesuffix("/")
+        data_path = f"{dataset_location}/{data_type_class.DATA_PATH}"
 
-        logger.debug(f"creating table static_db.main.{source_class.NAME}")
+        logger.debug(f"creating table static_db.main.{data_type_class.NAME}")
 
         # temporarily increase thread count for parallel parquet file scanning
         conn.execute("SET threads = 64;")
 
         try:
             sql_query = f"""
-                create or replace table {source_class.NAME} as (
-                    select {",".join(source_class.SOURCE_METADATA_COLUMNS)}
+                create or replace table {data_type_class.NAME} as (
+                    select {",".join(data_type_class.DATATYPE_METADATA_COLUMNS)}
                     from read_parquet(
                         '{data_path}/**/*.parquet',
                         hive_partitioning=true,
@@ -239,7 +240,7 @@ class TIMDEXDatasetMetadata:
             conn.execute(sql_query)
         except DuckDBIOException:
             logger.warning(
-                f"Could not create metadata table for '{source_class.NAME}' "
+                f"Could not create metadata table for '{data_type_class.NAME}' "
                 f"(no parquet data at '{data_path}'). Skipping."
             )
             return
@@ -247,9 +248,11 @@ class TIMDEXDatasetMetadata:
             # always reset thread count, even if parquet data is missing
             conn.execute(f"""SET threads = {self.timdex_dataset.conn_factory.threads};""")
 
-        row_count = conn.query(f"select count(*) from {source_class.NAME};").fetchone()[0]  # type: ignore[index]
+        row_count = conn.query(
+            f"select count(*) from {data_type_class.NAME};"
+        ).fetchone()[0]  # type: ignore[index]
         logger.info(
-            f"'{source_class.NAME}' table created - rows: {row_count}, "
+            f"'{data_type_class.NAME}' table created - rows: {row_count}, "
             f"elapsed: {time.perf_counter() - start_time}"
         )
 
@@ -265,17 +268,20 @@ class TIMDEXDatasetMetadata:
         if self.database_exists():
             self._attach_database_file(self.timdex_dataset.conn)
         else:
-            bootstrap_sources = [
-                source_class.NAME
-                for source_class in self.source_classes
-                if self._append_delta_count(self.timdex_dataset.conn, source_class) > 0
-            ]
-            if bootstrap_sources:
+            bootstrap_data_types = []
+            for data_type_class in self.data_type_classes:
+                append_delta_count = self._append_delta_count(
+                    self.timdex_dataset.conn, data_type_class
+                )
+                if append_delta_count > 0:
+                    bootstrap_data_types.append(data_type_class.NAME)
+
+            if bootstrap_data_types:
                 logger.warning(
                     "Static metadata database not found @ "
                     f"'{self.metadata_database_path}'. "
                     "Bootstrapping metadata views from append deltas for: "
-                    f"{', '.join(bootstrap_sources)}. "
+                    f"{', '.join(bootstrap_data_types)}. "
                     "Consider rebuild via "
                     "TIMDEXDataset.metadata.rebuild_dataset_metadata()."
                 )
@@ -287,9 +293,9 @@ class TIMDEXDatasetMetadata:
                     "TIMDEXDataset.metadata.rebuild_dataset_metadata()."
                 )
 
-        for source_class in self.source_classes:
-            self._create_append_deltas_view(self.timdex_dataset.conn, source_class)
-            self._create_union_view(self.timdex_dataset.conn, source_class)
+        for data_type_class in self.data_type_classes:
+            self._create_append_deltas_view(self.timdex_dataset.conn, data_type_class)
+            self._create_union_view(self.timdex_dataset.conn, data_type_class)
 
         for table_config in self.table_configs:
             if table_config.kind != "custom":
@@ -314,26 +320,26 @@ class TIMDEXDatasetMetadata:
         )
 
     def _create_append_deltas_view(
-        self, conn: DuckDBPyConnection, source_class: type["TIMDEXDataSource"]
+        self, conn: DuckDBPyConnection, data_type_class: type["TIMDEXDataType"]
     ) -> None:
-        """Create a view that projects over append delta parquet files for a data source.
+        """Create a view that projects over append delta parquet files for a data type.
 
         If there are NO append deltas (e.g. after a rebuild or merge), we still create a
         view by utilizing the schema from the static DB table but without any rows. This
         allows downstream views to be built on top of this view.
 
-        The view is named ``metadata.{source_class.NAME}_append_deltas``.
+        The view is named ``metadata.{data_type_class.NAME}_append_deltas``.
         """
-        view_name = f"{source_class.NAME}_append_deltas"
-        deltas_path = self.append_deltas_path_for(source_class)
-        static_table = f"static_db.{source_class.NAME}"
+        view_name = f"{data_type_class.NAME}_append_deltas"
+        deltas_path = self.append_deltas_path_for(data_type_class)
+        static_table = f"static_db.{data_type_class.NAME}"
 
         logger.debug(f"creating view metadata.{view_name}")
 
         # get current append delta count
-        append_delta_count = self._append_delta_count(conn, source_class)
+        append_delta_count = self._append_delta_count(conn, data_type_class)
         logger.debug(
-            f"{append_delta_count} append deltas found for '{source_class.NAME}'"
+            f"{append_delta_count} append deltas found for '{data_type_class.NAME}'"
         )
 
         # if deltas exist, always create this view from parquet files
@@ -353,7 +359,7 @@ class TIMDEXDatasetMetadata:
         table_exists = conn.execute(f"""
             select count(*) from information_schema.tables
             where table_catalog = 'static_db'
-            and table_name = '{source_class.NAME}'
+            and table_name = '{data_type_class.NAME}'
         """).fetchone()[0]  # type: ignore[index]
 
         if table_exists:
@@ -369,8 +375,8 @@ class TIMDEXDatasetMetadata:
 
         # no static table and no deltas, so no view to create
         logger.debug(
-            f"No static table or append deltas found for '{source_class.NAME}'; "
-            f"skipping append deltas view for '{source_class.NAME}'."
+            f"No static table or append deltas found for '{data_type_class.NAME}'; "
+            f"skipping append deltas view for '{data_type_class.NAME}'."
         )
 
     # columns added to bolt-on types via pre-join to metadata.records
@@ -383,38 +389,39 @@ class TIMDEXDatasetMetadata:
     ]
 
     def _create_union_view(
-        self, conn: DuckDBPyConnection, source_class: type["TIMDEXDataSource"]
+        self, conn: DuckDBPyConnection, data_type_class: type["TIMDEXDataType"]
     ) -> None:
-        """Create a union view combining static DB and append deltas for a data source.
+        """Create a union view combining static DB and append deltas for a data type.
 
-        The view is named ``metadata.{source_class.NAME}`` and unions
-        `static_db.{source_class.NAME}` with `metadata.{source_class.NAME}_append_deltas`.
+        The view is named ``metadata.{data_type_class.NAME}`` and unions
+        `static_db.{data_type_class.NAME}` with
+        `metadata.{data_type_class.NAME}_append_deltas`.
 
-        For bolt-on data sources (`source_class.PREJOIN_RECORDS=True`), the view
+        For bolt-on data types (`data_type_class.PREJOIN_RECORDS=True`), the view
         pre-joins to `metadata.records` so that `source`, `run_date`, `run_type`,
         `action`, and `run_timestamp` are available as filterable columns.
         """
-        view_name = source_class.NAME
-        static_table = f"static_db.{source_class.NAME}"
-        deltas_view = f"metadata.{source_class.NAME}_append_deltas"
-        columns = ",".join(source_class.SOURCE_METADATA_COLUMNS)
+        view_name = data_type_class.NAME
+        static_table = f"static_db.{data_type_class.NAME}"
+        deltas_view = f"metadata.{data_type_class.NAME}_append_deltas"
+        columns = ",".join(data_type_class.DATATYPE_METADATA_COLUMNS)
 
         logger.debug(f"creating view metadata.{view_name}")
 
         static_table_exists = conn.execute(f"""
             select count(*) from information_schema.tables
             where table_catalog = 'static_db'
-            and table_name = '{source_class.NAME}'
+            and table_name = '{data_type_class.NAME}'
         """).fetchone()[0]  # type: ignore[index]
 
         deltas_view_exists = conn.execute(f"""
             select count(*) from information_schema.tables
             where table_schema = 'metadata'
-            and table_name = '{source_class.NAME}_append_deltas'
+            and table_name = '{data_type_class.NAME}_append_deltas'
             and table_type = 'VIEW'
         """).fetchone()[0]  # type: ignore[index]
 
-        # build the base union (or single-source) subquery
+        # build the base union (or single-input) subquery
         base_subquery = self._build_base_union_sql(
             static_table,
             deltas_view,
@@ -425,12 +432,13 @@ class TIMDEXDatasetMetadata:
 
         if base_subquery is None:
             logger.debug(
-                f"No static table or append deltas view found for '{source_class.NAME}'; "
-                f"skipping union view for '{source_class.NAME}'."
+                "No static table or append deltas view found for "
+                f"'{data_type_class.NAME}'; skipping union view for "
+                f"'{data_type_class.NAME}'."
             )
             return
 
-        if source_class.PREJOIN_RECORDS:
+        if data_type_class.PREJOIN_RECORDS:
             if not self._metadata_table_exists(conn, "records"):
                 logger.warning(
                     f"Skipping metadata.{view_name} view creation because missing "
@@ -462,7 +470,7 @@ class TIMDEXDatasetMetadata:
         static_table_exists: int,
         deltas_view_exists: int,
     ) -> str | None:
-        """Return base union SQL or None if neither source exists."""
+        """Return base union SQL or None if neither input exists."""
         if static_table_exists and deltas_view_exists:
             return f"""
                 select {columns} from {static_table}
@@ -476,9 +484,9 @@ class TIMDEXDatasetMetadata:
         return None
 
     def _create_custom_metadata_table(
-        self, conn: DuckDBPyConnection, table_config: "DataSourceTableConfig"
+        self, conn: DuckDBPyConnection, table_config: "DataTypeTableConfig"
     ) -> None:
-        """Create a custom metadata view from a data-source table config."""
+        """Create a custom metadata view from a data-type table config."""
         missing_tables = [
             table_name
             for table_name in table_config.required_metadata_tables
@@ -516,7 +524,7 @@ class TIMDEXDatasetMetadata:
             {table_config.query_sql};
         """)
 
-    def _should_preload_table(self, table_config: "DataSourceTableConfig") -> bool:
+    def _should_preload_table(self, table_config: "DataTypeTableConfig") -> bool:
         """Return True when a table config is configured for temp-table preloading."""
         if table_config.preload_setting_attribute is None:
             return False
@@ -525,10 +533,10 @@ class TIMDEXDatasetMetadata:
         )
 
     def _append_delta_count(
-        self, conn: DuckDBPyConnection, source_class: type["TIMDEXDataSource"]
+        self, conn: DuckDBPyConnection, data_type_class: type["TIMDEXDataType"]
     ) -> int:
-        """Return append delta parquet file count for a single data source."""
-        deltas_glob = f"{self.append_deltas_path_for(source_class)}/*.parquet"
+        """Return append delta parquet file count for a single data type."""
+        deltas_glob = f"{self.append_deltas_path_for(data_type_class)}/*.parquet"
 
         try:
             return cast(
@@ -541,7 +549,7 @@ class TIMDEXDatasetMetadata:
         except (DuckDBHTTPException, DuckDBIOException):
             logger.debug(
                 "Could not inspect append deltas for "
-                f"'{source_class.NAME}' at '{deltas_glob}'; assuming none exist."
+                f"'{data_type_class.NAME}' at '{deltas_glob}'; assuming none exist."
             )
             return 0
 
@@ -557,7 +565,7 @@ class TIMDEXDatasetMetadata:
     def merge_append_deltas(self) -> None:
         """Merge append deltas into the static metadata database file.
 
-        Iterates over all data source configs, merging each source's deltas into its
+        Iterates over all data type configs, merging each data type's deltas into its
         corresponding table in the static database.
         """
         logger.info("merging append deltas into static metadata database file")
@@ -566,11 +574,11 @@ class TIMDEXDatasetMetadata:
 
         s3_client = S3Client()
 
-        # collect all append delta filenames across all sources
+        # collect all append delta filenames across all data types
         all_delta_filenames: dict[str, list[str]] = {}
         has_any_deltas = False
-        for source_class in self.source_classes:
-            deltas_view = f"{source_class.NAME}_append_deltas"
+        for data_type_class in self.data_type_classes:
+            deltas_view = f"{data_type_class.NAME}_append_deltas"
             try:
                 filenames = (
                     self.timdex_dataset.conn.query(f"""
@@ -587,7 +595,7 @@ class TIMDEXDatasetMetadata:
                 KeyError,
             ):
                 filenames = []
-            all_delta_filenames[source_class.NAME] = filenames
+            all_delta_filenames[data_type_class.NAME] = filenames
             if filenames:
                 has_any_deltas = True
 
@@ -610,11 +618,11 @@ class TIMDEXDatasetMetadata:
                 f"""attach '{local_db_path}' AS local_static_db;"""
             )
 
-            # merge deltas for each data source
-            for source_class in self.source_classes:
-                if not all_delta_filenames[source_class.NAME]:
+            # merge deltas for each data type
+            for data_type_class in self.data_type_classes:
+                if not all_delta_filenames[data_type_class.NAME]:
                     continue
-                self._merge_deltas_for_type(source_class)
+                self._merge_deltas_for_data_type(data_type_class)
 
             # detach from local static db
             self.timdex_dataset.conn.execute("""detach local_static_db;""")
@@ -628,9 +636,9 @@ class TIMDEXDatasetMetadata:
             else:
                 shutil.copy(src=local_db_path, dst=self.metadata_database_path)
 
-        # delete append deltas for all sources
-        for source_class in self.source_classes:
-            for delta_filename in all_delta_filenames[source_class.NAME]:
+        # delete append deltas for all data types
+        for data_type_class in self.data_type_classes:
+            for delta_filename in all_delta_filenames[data_type_class.NAME]:
                 if self.timdex_dataset.location_scheme == "s3":
                     s3_client.delete_file(s3_uri=delta_filename)
                 else:
@@ -641,30 +649,32 @@ class TIMDEXDatasetMetadata:
             f"{self.metadata_database_path}, {time.perf_counter() - start_time}s"
         )
 
-    def _merge_deltas_for_type(self, source_class: type["TIMDEXDataSource"]) -> None:
-        """Insert rows from append deltas into the local static DB for one data source."""
-        columns = ",".join(source_class.SOURCE_METADATA_COLUMNS)
-        deltas_view = f"metadata.{source_class.NAME}_append_deltas"
+    def _merge_deltas_for_data_type(
+        self, data_type_class: type["TIMDEXDataType"]
+    ) -> None:
+        """Insert rows from append deltas into the local static DB for one data type."""
+        columns = ",".join(data_type_class.DATATYPE_METADATA_COLUMNS)
+        deltas_view = f"metadata.{data_type_class.NAME}_append_deltas"
 
-        logger.debug(f"merging append deltas for '{source_class.NAME}'")
+        logger.debug(f"merging append deltas for '{data_type_class.NAME}'")
 
-        # if type table doesn't yet exist in static DB, initialize it from deltas schema
+        # if data type table doesn't yet exist in static DB, initialize from deltas schema
         table_exists = self.timdex_dataset.conn.execute(f"""
             select count(*) from information_schema.tables
             where table_catalog = 'local_static_db'
-            and table_name = '{source_class.NAME}'
+            and table_name = '{data_type_class.NAME}'
         """).fetchone()[0]  # type: ignore[index]
 
         if not table_exists:
             self.timdex_dataset.conn.execute(f"""
-                create table local_static_db.{source_class.NAME} as
+                create table local_static_db.{data_type_class.NAME} as
                 select {columns}
                 from {deltas_view}
                 where 1 = 0
             """)
 
         self.timdex_dataset.conn.execute(f"""
-            insert into local_static_db.{source_class.NAME}
+            insert into local_static_db.{data_type_class.NAME}
             select {columns}
             from {deltas_view}
         """)
@@ -672,23 +682,23 @@ class TIMDEXDatasetMetadata:
     def write_append_delta(
         self,
         filepath: str,
-        source_class: type["TIMDEXDataSource"],
+        data_type_class: type["TIMDEXDataType"],
     ) -> None:
         """Write an append delta for a parquet file.
 
         A DuckDB context is used to read metadata-only columns from the parquet
         file, then write an append delta parquet file to
-        ``metadata/append_deltas/{source_class.NAME}/``.
+        ``metadata/append_deltas/{data_type_class.NAME}/``.
 
         Note: this operation is safe in parallel with other possible append delta writes.
 
         Args:
             filepath: path to the parquet file to extract metadata from
-            source_class: the data source class owning this parquet file
+            data_type_class: the data type class owning this parquet file
         """
         start_time = time.perf_counter()
 
-        deltas_path = self.append_deltas_path_for(source_class)
+        deltas_path = self.append_deltas_path_for(data_type_class)
         output_path = f"{deltas_path}/append_delta-{filepath.split('/')[-1]}"
 
         # ensure s3:// schema prefix is present
@@ -698,7 +708,7 @@ class TIMDEXDatasetMetadata:
         sql = f"""
         copy (
             select
-                {",".join(source_class.SOURCE_METADATA_COLUMNS)}
+                {",".join(data_type_class.DATATYPE_METADATA_COLUMNS)}
             from read_parquet(
                 '{filepath}',
                 hive_partitioning=true,
