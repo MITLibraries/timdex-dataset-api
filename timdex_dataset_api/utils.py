@@ -11,6 +11,7 @@ from urllib.parse import urlparse
 
 import boto3
 import duckdb
+from botocore.exceptions import ClientError, NoCredentialsError, PartialCredentialsError
 from duckdb import DuckDBPyConnection
 from duckdb_engine import ConnectionWrapper
 from sqlalchemy import (
@@ -20,11 +21,14 @@ from sqlalchemy import (
     create_engine,
 )
 
+from timdex_dataset_api.exceptions import AWSCredentialsError
+
 if TYPE_CHECKING:
     from mypy_boto3_s3.service_resource import S3ServiceResource
 
 
 logger = logging.getLogger(__name__)
+HTTP_FORBIDDEN = 403
 
 
 class S3Client:
@@ -55,10 +59,16 @@ class S3Client:
         try:
             self.resource.Object(bucket, key).load()
             return True  # noqa: TRY300
-        except self.resource.meta.client.exceptions.ClientError as e:
-            if e.response["Error"]["Code"] == "404":
+        except ClientError as e:
+            error_code = e.response["Error"]["Code"]
+            http_status_code = e.response["ResponseMetadata"]["HTTPStatusCode"]
+            if error_code == "404":
                 return False
+            if http_status_code == HTTP_FORBIDDEN:
+                raise AWSCredentialsError from e
             raise
+        except (NoCredentialsError, PartialCredentialsError) as e:
+            raise AWSCredentialsError from e
 
     def list_objects(self, s3_prefix: str) -> list[str]:
         bucket, _ = self._split_s3_uri(s3_prefix)
@@ -186,13 +196,16 @@ class DuckDBConnectionFactory:
                 """)
 
         elif self.location_scheme == "s3":
-            conn.execute("""
-                create or replace secret aws_s3_secret (
-                    type s3,
-                    provider credential_chain,
-                    refresh true
-                );
-                """)
+            try:
+                conn.execute("""
+                    create or replace secret aws_s3_secret (
+                        type s3,
+                        provider credential_chain,
+                        refresh true
+                    );
+                    """)
+            except duckdb.Error as e:
+                raise AWSCredentialsError from e
 
     def _configure_memory_profile(self, conn: DuckDBPyConnection) -> None:
         """Configure DuckDB memory and thread settings."""
