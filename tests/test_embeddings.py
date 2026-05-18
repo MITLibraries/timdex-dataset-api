@@ -10,7 +10,8 @@ import pytest
 
 from tests.utils import generate_sample_embeddings_for_run, generate_sample_records
 from timdex_dataset_api import TIMDEXDataset
-from timdex_dataset_api.embeddings import DatasetEmbedding, TIMDEXEmbeddings
+from timdex_dataset_api.data_types import TIMDEXEmbeddings
+from timdex_dataset_api.data_types.embeddings import DatasetEmbedding
 
 EMBEDDINGS_AVAILABLE_COLUMNS_SET = set(TIMDEXEmbeddings.AVAILABLE_READ_COLUMNS)
 

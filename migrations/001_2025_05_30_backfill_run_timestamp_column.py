@@ -41,8 +41,8 @@ import pyarrow.parquet as pq
 from pyarrow import fs
 
 from timdex_dataset_api.config import configure_dev_logger, configure_logger
+from timdex_dataset_api.data_types import TIMDEXRecords
 from timdex_dataset_api.dataset import TIMDEXDataset
-from timdex_dataset_api.records import TIMDEXRecords
 
 configure_dev_logger()
 

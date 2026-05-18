@@ -141,7 +141,7 @@ See [docs/reading.md](docs/reading.md) for more information.
 At this time, the only application that writes to the ETL parquet dataset is Transmogrifier.
 
 To write records to the dataset, you must prepare an iterator of
-`timdex_dataset_api.records.DatasetRecord`.  Here is some pseudocode for how a
+`timdex_dataset_api.data_types.records.DatasetRecord`.  Here is some pseudocode for how a
 record dataset write can work:
 
 ```python

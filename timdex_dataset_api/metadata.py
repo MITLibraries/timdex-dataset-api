@@ -24,8 +24,8 @@ from timdex_dataset_api.utils import (
 
 if TYPE_CHECKING:
     from timdex_dataset_api.data_type import DataTypeTableConfig, TIMDEXDataType
+    from timdex_dataset_api.data_types.records import RecordsFilters
     from timdex_dataset_api.dataset import TIMDEXDataset
-    from timdex_dataset_api.records import RecordsFilters
 
 logger = configure_logger(__name__)
 

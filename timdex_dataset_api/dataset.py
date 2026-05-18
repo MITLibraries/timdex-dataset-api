@@ -12,9 +12,8 @@ from pyarrow import fs
 from sqlalchemy import MetaData, Table, create_engine
 
 from timdex_dataset_api.config import configure_logger
-from timdex_dataset_api.embeddings import TIMDEXEmbeddings
+from timdex_dataset_api.data_types import TIMDEXEmbeddings, TIMDEXRecords
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
-from timdex_dataset_api.records import TIMDEXRecords
 from timdex_dataset_api.utils import DuckDBConnectionFactory
 
 logger = configure_logger(__name__)

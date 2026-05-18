@@ -3,7 +3,7 @@ from datetime import UTC, date, datetime
 
 import pytest
 
-from timdex_dataset_api.records import DatasetRecord
+from timdex_dataset_api.data_types.records import DatasetRecord
 
 
 def test_dataset_record_init_with_valid_run_date_parses_year_month_day():
