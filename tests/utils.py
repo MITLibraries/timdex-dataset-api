@@ -7,8 +7,12 @@ import random
 import uuid
 from collections.abc import Iterator
 
-from timdex_dataset_api import DatasetRecord, TIMDEXDataset
-from timdex_dataset_api.data_types.embeddings import DatasetEmbedding
+from timdex_dataset_api import TIMDEXDataset
+from timdex_dataset_api.data_types import (
+    DatasetEmbedding,
+    DatasetFulltext,
+    DatasetRecord,
+)
 
 
 def generate_sample_records(
@@ -130,4 +134,54 @@ def generate_sample_embeddings_for_run(
             embedding_vector=embedding_vector,
             embedding_object=embedding_object,
             embedding_timestamp=embedding_timestamp,
+        )
+
+
+def generate_sample_fulltexts(
+    num_fulltexts: int,
+    source: str | None = "alma",
+    run_id: str | None = None,
+    fulltext_timestamp: str | None = "2024-12-01T00:00:00+00:00",
+) -> Iterator[DatasetFulltext]:
+    """Generate sample DatasetFulltexts."""
+    if not run_id:
+        run_id = str(uuid.uuid4())
+
+    for x in range(num_fulltexts):
+        yield DatasetFulltext(
+            timdex_record_id=f"{source}:{x}",
+            run_id=run_id,
+            run_record_offset=x,
+            fulltext_timestamp=fulltext_timestamp,
+            fulltext=f"Sample fulltext content for {source}:{x}.".encode(),
+        )
+
+
+def generate_sample_fulltexts_for_run(
+    timdex_dataset: TIMDEXDataset,
+    run_id: str,
+    fulltext_timestamp: str | None = None,
+    fulltext_length: int = 1024,
+) -> Iterator[DatasetFulltext]:
+    """Generate sample DatasetFulltexts for a given ETL run."""
+    records_metadata = timdex_dataset.conn.query(f"""
+    select
+        *
+    from metadata.records
+    where run_id = '{run_id}';
+    """).to_df()
+
+    if not fulltext_timestamp:
+        fulltext_timestamp = records_metadata.iloc[0].run_timestamp.isoformat()
+
+    for _idx, record in records_metadata.iterrows():
+        yield DatasetFulltext(
+            timdex_record_id=record.timdex_record_id,
+            run_id=run_id,
+            run_record_offset=record.run_record_offset,
+            fulltext_timestamp=fulltext_timestamp,
+            fulltext=(
+                f"Sample fulltext content for {record.timdex_record_id}.  "
+                f"Content {'x' * fulltext_length}"
+            ).encode(),
         )

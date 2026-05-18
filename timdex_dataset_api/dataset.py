@@ -12,7 +12,11 @@ from pyarrow import fs
 from sqlalchemy import MetaData, Table, create_engine
 
 from timdex_dataset_api.config import configure_logger
-from timdex_dataset_api.data_types import TIMDEXEmbeddings, TIMDEXRecords
+from timdex_dataset_api.data_types import (
+    TIMDEXEmbeddings,
+    TIMDEXFulltexts,
+    TIMDEXRecords,
+)
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 from timdex_dataset_api.utils import DuckDBConnectionFactory
 
@@ -91,7 +95,7 @@ class TIMDEXDataset:
         # create schemas
         self._create_duckdb_schemas()
 
-        self.data_type_classes = [TIMDEXRecords, TIMDEXEmbeddings]
+        self.data_type_classes = [TIMDEXRecords, TIMDEXEmbeddings, TIMDEXFulltexts]
 
         # define readable metadata-backed tables contributed by data types
         self.table_configs = [
@@ -101,9 +105,10 @@ class TIMDEXDataset:
         ]
 
         # composed components receive self
-        self.records = TIMDEXRecords(self)
         self.metadata = TIMDEXDatasetMetadata(self)
+        self.records = TIMDEXRecords(self)
         self.embeddings = TIMDEXEmbeddings(self)
+        self.fulltexts = TIMDEXFulltexts(self)
 
         # SQLAlchemy (SA) reflection after components have set up their views
         self.sa_tables: dict[str, dict[str, Table]] = {}
