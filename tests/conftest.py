@@ -13,13 +13,11 @@ from tests.utils import (
     generate_sample_records,
 )
 from timdex_dataset_api import TIMDEXDataset
+from timdex_dataset_api.data_types import TIMDEXEmbeddings
+from timdex_dataset_api.data_types.embeddings import DatasetEmbedding
+from timdex_dataset_api.data_types.records import DatasetRecord
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
-from timdex_dataset_api.embeddings import (
-    DatasetEmbedding,
-    TIMDEXEmbeddings,
-)
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
-from timdex_dataset_api.records import DatasetRecord
 
 
 @pytest.fixture(autouse=True)

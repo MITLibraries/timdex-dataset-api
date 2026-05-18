@@ -9,7 +9,7 @@ import pyarrow.dataset as ds
 import pyarrow.parquet as pq
 
 from tests.utils import generate_sample_records
-from timdex_dataset_api.records import TIMDEXRecords
+from timdex_dataset_api.data_types import TIMDEXRecords
 
 
 def _count_rows_via_duckdb_parquet(timdex_dataset) -> int:

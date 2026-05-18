@@ -6,7 +6,7 @@ import pyarrow as pa
 import pytest
 from duckdb import ParserException
 
-from timdex_dataset_api.records import TIMDEXRecords
+from timdex_dataset_api.data_types import TIMDEXRecords
 
 DATASET_COLUMNS_SET = set(TIMDEXRecords.AVAILABLE_READ_COLUMNS)
 

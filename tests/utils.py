@@ -8,7 +8,7 @@ import uuid
 from collections.abc import Iterator
 
 from timdex_dataset_api import DatasetRecord, TIMDEXDataset
-from timdex_dataset_api.embeddings import DatasetEmbedding
+from timdex_dataset_api.data_types.embeddings import DatasetEmbedding
 
 
 def generate_sample_records(

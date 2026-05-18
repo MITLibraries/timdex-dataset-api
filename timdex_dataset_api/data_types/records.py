@@ -1,4 +1,4 @@
-"""timdex_dataset_api/records.py"""
+"""timdex_dataset_api/data_types/records.py"""
 
 import json
 from collections.abc import Iterator

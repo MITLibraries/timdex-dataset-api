@@ -10,9 +10,8 @@ from duckdb import DuckDBPyConnection
 from tests.utils import generate_sample_embeddings_for_run, generate_sample_records
 from timdex_dataset_api import TIMDEXDataset
 from timdex_dataset_api.data_type import TIMDEXDataType
-from timdex_dataset_api.embeddings import TIMDEXEmbeddings
+from timdex_dataset_api.data_types import TIMDEXEmbeddings, TIMDEXRecords
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
-from timdex_dataset_api.records import TIMDEXRecords
 
 
 def test_tdm_init_no_metadata_file_warning_success(caplog, tmp_path):
