@@ -1612,7 +1612,7 @@ wheels = [
 
 [[package]]
 name = "timdex-dataset-api"
-version = "5.0.1"
+version = "5.1.0"
 source = { editable = "." }
 dependencies = [
     { name = "attrs" },
