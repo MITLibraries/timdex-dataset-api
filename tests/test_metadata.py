@@ -10,7 +10,7 @@ from duckdb import DuckDBPyConnection
 from tests.utils import generate_sample_embeddings_for_run, generate_sample_records
 from timdex_dataset_api import TIMDEXDataset
 from timdex_dataset_api.data_type import TIMDEXDataType
-from timdex_dataset_api.data_types import TIMDEXEmbeddings, TIMDEXRecords
+from timdex_dataset_api.data_types import TIMDEXEmbeddings, TIMDEXFulltexts, TIMDEXRecords
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 
@@ -57,6 +57,20 @@ def test_data_type_metadata_columns_are_derived_from_base_class():
         "embedding_strategy",
     ] == TIMDEXEmbeddings.METADATA_COLUMNS
 
+    assert TIMDEXFulltexts.DATATYPE_METADATA_COLUMNS == [
+        "timdex_record_id",
+        "run_id",
+        "run_record_offset",
+        "filename",
+        "fulltext_timestamp",
+        "fulltext_md5",
+    ]
+    assert [
+        *TIMDEXDatasetMetadata.BASE_METADATA_COLUMNS,
+        "fulltext_timestamp",
+        "fulltext_md5",
+    ] == TIMDEXFulltexts.METADATA_COLUMNS
+
 
 def test_data_type_subclass_requires_contract_vars():
     with pytest.raises(
@@ -76,8 +90,10 @@ def test_dataset_registers_table_configs_from_data_types(tmp_path):
 
     expected_table_names = [
         table_config.name
-        for table_config in (TIMDEXRecords.TABLES + TIMDEXEmbeddings.TABLES)
+        for data_type_class in td.data_type_classes
+        for table_config in data_type_class.TABLES
     ]
+
     assert [
         table_config.name for table_config in td.table_configs
     ] == expected_table_names

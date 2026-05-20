@@ -10,11 +10,14 @@ import pytest
 from tests.utils import (
     generate_sample_embeddings,
     generate_sample_embeddings_for_run,
+    generate_sample_fulltexts,
+    generate_sample_fulltexts_for_run,
     generate_sample_records,
 )
 from timdex_dataset_api import TIMDEXDataset
-from timdex_dataset_api.data_types import TIMDEXEmbeddings
+from timdex_dataset_api.data_types import TIMDEXEmbeddings, TIMDEXFulltexts
 from timdex_dataset_api.data_types.embeddings import DatasetEmbedding
+from timdex_dataset_api.data_types.fulltexts import DatasetFulltext
 from timdex_dataset_api.data_types.records import DatasetRecord
 from timdex_dataset_api.dataset import TIMDEXDatasetConfig
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
@@ -339,10 +342,64 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
     - orange: full run with 10 records + daily run with 5 records
     - lemon: full run with 10 records + daily run with 5 records
     """
-    timdex_dataset_dataset = timdex_dataset_empty
+    return _dataset_for_bolt_on_view_tests(timdex_dataset_empty)
 
+
+# ================================================================================
+# Dataset Fulltexts Fixtures
+# ================================================================================
+@pytest.fixture
+def timdex_fulltexts_with_runs(timdex_dataset_empty) -> TIMDEXFulltexts:
+    """TIMDEXFulltexts with multiple runs.
+
+    Also writes matching records and rebuilds metadata so fulltexts queries
+    can join to metadata.records.
+    """
+    timdex_dataset = timdex_dataset_empty
+
+    # write matching records for fulltexts
+    timdex_dataset.records.write(
+        generate_sample_records(100, source="alma", run_id="abc123"),
+        write_append_deltas=False,
+    )
+    timdex_dataset.records.write(
+        generate_sample_records(50, source="alma", run_id="def456"),
+        write_append_deltas=False,
+    )
+
+    # reload TIMDEXDataset instance and build metadata
+    timdex_dataset.metadata.rebuild_dataset_metadata()
+    timdex_dataset = TIMDEXDataset(timdex_dataset.location)
+
+    # write fulltexts
+    timdex_dataset.fulltexts.write(
+        generate_sample_fulltexts_for_run(timdex_dataset, run_id="abc123")
+    )
+    timdex_dataset.fulltexts.write(
+        generate_sample_fulltexts_for_run(timdex_dataset, run_id="def456")
+    )
+
+    # rebuild metadata to include fulltexts, then reload
+    timdex_dataset.metadata.rebuild_dataset_metadata()
+    return TIMDEXDataset(timdex_dataset_empty.location).fulltexts
+
+
+@pytest.fixture
+def timdex_dataset_for_fulltexts_views(timdex_dataset_empty) -> TIMDEXDataset:
+    """TIMDEXDataset with records for testing fulltexts views.
+
+    Creates three scenarios to test DuckDB views:
+    - apple: single full run with 10 records
+    - orange: full run with 10 records + daily run with 5 records
+    - lemon: full run with 10 records + daily run with 5 records
+    """
+    return _dataset_for_bolt_on_view_tests(timdex_dataset_empty)
+
+
+def _dataset_for_bolt_on_view_tests(timdex_dataset: TIMDEXDataset) -> TIMDEXDataset:
+    """Create a dataset with records for bolt-on data type view tests."""
     # scenario 1: apple - single full run
-    timdex_dataset_dataset.records.write(
+    timdex_dataset.records.write(
         generate_sample_records(
             num_records=10,
             source="apple",
@@ -354,7 +411,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
     )
 
     # scenario 2: orange - full run + daily run
-    timdex_dataset_dataset.records.write(
+    timdex_dataset.records.write(
         generate_sample_records(
             num_records=10,
             source="orange",
@@ -364,7 +421,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
         ),
         write_append_deltas=False,
     )
-    timdex_dataset_dataset.records.write(
+    timdex_dataset.records.write(
         generate_sample_records(
             num_records=5,
             source="orange",
@@ -375,8 +432,8 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
         write_append_deltas=False,
     )
 
-    # scenario 3: lemon - full run + daily run (daily will be embedded twice)
-    timdex_dataset_dataset.records.write(
+    # scenario 3: lemon - full run + daily run
+    timdex_dataset.records.write(
         generate_sample_records(
             num_records=10,
             source="lemon",
@@ -386,7 +443,7 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
         ),
         write_append_deltas=False,
     )
-    timdex_dataset_dataset.records.write(
+    timdex_dataset.records.write(
         generate_sample_records(
             num_records=5,
             source="lemon",
@@ -398,10 +455,10 @@ def timdex_dataset_for_embeddings_views(timdex_dataset_empty) -> TIMDEXDataset:
     )
 
     # rebuild metadata so records can be queried
-    timdex_dataset_dataset.metadata.rebuild_dataset_metadata()
+    timdex_dataset.metadata.rebuild_dataset_metadata()
 
     # reload dataset to work around bug
-    return TIMDEXDataset(timdex_dataset_dataset.location)
+    return TIMDEXDataset(timdex_dataset.location)
 
 
 # ================================================================================
@@ -437,5 +494,21 @@ def sample_embeddings_generator():
 
     def _generate(num_embeddings: int = 100, **kwargs) -> Iterator[DatasetEmbedding]:
         return generate_sample_embeddings(num_embeddings=num_embeddings, **kwargs)
+
+    return _generate
+
+
+@pytest.fixture
+def sample_fulltexts() -> Iterator[DatasetFulltext]:
+    """Generate 100 sample fulltexts with default parameters."""
+    return generate_sample_fulltexts(num_fulltexts=100)
+
+
+@pytest.fixture
+def sample_fulltexts_generator():
+    """Factory fixture for generating custom sample fulltexts."""
+
+    def _generate(num_fulltexts: int = 100, **kwargs) -> Iterator[DatasetFulltext]:
+        return generate_sample_fulltexts(num_fulltexts=num_fulltexts, **kwargs)
 
     return _generate

@@ -2,22 +2,29 @@
 
 from importlib.metadata import version
 
-from timdex_dataset_api.data_type import DataTypeTableConfig, TIMDEXDataType
-from timdex_dataset_api.data_types import TIMDEXEmbeddings, TIMDEXRecords
-from timdex_dataset_api.data_types.embeddings import DatasetEmbedding
-from timdex_dataset_api.data_types.records import DatasetRecord
+from timdex_dataset_api.data_types import (
+    DatasetEmbedding,
+    DatasetFulltext,
+    DatasetRecord,
+    TIMDEXEmbeddings,
+    TIMDEXFulltexts,
+    TIMDEXRecords,
+)
 from timdex_dataset_api.dataset import TIMDEXDataset
 from timdex_dataset_api.metadata import TIMDEXDatasetMetadata
 
 __version__ = version("timdex_dataset_api")
 
+# NOTE: proposed that we remove all imports from 'data_types' on next major release
+#   to avoid over-populating the root namespace.   Leaving now for backwards
+#   compatibility.
 __all__ = [
-    "DataTypeTableConfig",
     "DatasetEmbedding",
+    "DatasetFulltext",
     "DatasetRecord",
-    "TIMDEXDataType",
     "TIMDEXDataset",
     "TIMDEXDatasetMetadata",
     "TIMDEXEmbeddings",
+    "TIMDEXFulltexts",
     "TIMDEXRecords",
 ]

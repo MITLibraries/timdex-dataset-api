@@ -1,6 +1,7 @@
 """TIMDEX dataset data type implementations."""
 
 from timdex_dataset_api.data_types.embeddings import DatasetEmbedding, TIMDEXEmbeddings
+from timdex_dataset_api.data_types.fulltexts import DatasetFulltext, TIMDEXFulltexts
 from timdex_dataset_api.data_types.records import (
     DatasetRecord,
     RecordsFilters,
@@ -9,8 +10,10 @@ from timdex_dataset_api.data_types.records import (
 
 __all__ = [
     "DatasetEmbedding",
+    "DatasetFulltext",
     "DatasetRecord",
     "RecordsFilters",
     "TIMDEXEmbeddings",
+    "TIMDEXFulltexts",
     "TIMDEXRecords",
 ]

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "timdex_dataset_api"
-version = "5.0.1"
+version = "5.1.0"
 description = "Python library for interacting with a TIMDEX parquet dataset"
 readme = "README.md"
 requires-python = ">=3.12"
