@@ -347,10 +347,7 @@ class TIMDEXDatasetMetadata:
             conn.execute(f"""
                 create or replace view metadata.{view_name} as (
                     select *
-                    from read_parquet(
-                        '{deltas_path}/*.parquet',
-                        filename = 'append_delta_filename'
-                    )
+                    from read_parquet('{deltas_path}/*.parquet')
                 );
             """)
             return
@@ -365,8 +362,7 @@ class TIMDEXDatasetMetadata:
         if table_exists:
             conn.execute(f"""
                 create or replace view metadata.{view_name} as (
-                    select *,
-                        null::varchar as append_delta_filename
+                    select *
                     from {static_table}
                     where 1 = 0
                 );
@@ -578,22 +574,16 @@ class TIMDEXDatasetMetadata:
         all_delta_filenames: dict[str, list[str]] = {}
         has_any_deltas = False
         for data_type_class in self.data_type_classes:
-            deltas_view = f"{data_type_class.NAME}_append_deltas"
+            deltas_glob = f"{self.append_deltas_path_for(data_type_class)}/*.parquet"
             try:
                 filenames = (
                     self.timdex_dataset.conn.query(f"""
-                        select distinct(append_delta_filename)
-                        from metadata.{deltas_view}
+                        select file from glob('{deltas_glob}')
                     """)
-                    .to_df()["append_delta_filename"]
+                    .to_df()["file"]
                     .to_list()
                 )
-            except (
-                DuckDBIOException,
-                DuckDBCatalogException,
-                DuckDBBinderException,
-                KeyError,
-            ):
+            except (DuckDBIOException, KeyError):
                 filenames = []
             all_delta_filenames[data_type_class.NAME] = filenames
             if filenames:

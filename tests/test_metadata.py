@@ -262,7 +262,6 @@ def test_tdm_append_deltas_view_empty_structure(timdex_metadata):
         "run_record_offset",
         "run_timestamp",
         "filename",
-        "append_delta_filename",
     }
     assert set(append_deltas_df.columns) == expected_columns
     assert len(append_deltas_df) == 0
@@ -321,6 +320,30 @@ def test_tdm_views_with_append_deltas(timdex_metadata_with_deltas):
 def test_tdm_append_deltas_view_has_data(timdex_metadata_with_deltas):
     append_deltas_count = timdex_metadata_with_deltas.append_deltas_count
     assert append_deltas_count > 0
+
+
+def test_tdm_filename_filter_matches_append_delta_rows(timdex_metadata_with_deltas):
+    conn = timdex_metadata_with_deltas.timdex_dataset.conn
+    filename = conn.execute(
+        "select filename from metadata.records_append_deltas limit 1"
+    ).fetchone()[0]
+
+    delta_count = conn.execute(
+        "select count(*) from metadata.records_append_deltas where filename = ?",
+        [filename],
+    ).fetchone()[0]
+    records_count = conn.execute(
+        "select count(*) from metadata.records where filename = ?", [filename]
+    ).fetchone()[0]
+    shadow_count = conn.execute("""
+        select count(*)
+        from metadata.records_append_deltas
+        where filename like '%append_delta%'
+        """).fetchone()[0]
+
+    assert delta_count > 0
+    assert records_count >= delta_count
+    assert shadow_count == 0
 
 
 def test_tdm_records_includes_deltas(timdex_metadata_with_deltas):
