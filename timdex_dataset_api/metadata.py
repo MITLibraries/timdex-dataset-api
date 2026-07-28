@@ -129,9 +129,12 @@ class TIMDEXDatasetMetadata:
     def append_deltas_count_for(self, data_type_class: type["TIMDEXDataType"]) -> int:
         """Count append deltas rows for a single data type."""
         view_name = f"{data_type_class.NAME}_append_deltas"
-        return self.timdex_dataset.conn.query(f"""
-            select count(*) from metadata.{view_name};
-        """).fetchone()[0]  # type: ignore[index]
+        try:
+            return self.timdex_dataset.conn.query(f"""
+                select count(*) from metadata.{view_name};
+            """).fetchone()[0]  # type: ignore[index]
+        except (DuckDBCatalogException, DuckDBIOException):
+            return 0
 
     @property
     def append_deltas_count(self) -> int:

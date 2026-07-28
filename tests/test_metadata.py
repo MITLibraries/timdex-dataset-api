@@ -289,6 +289,10 @@ def test_tdm_append_deltas_count_property_empty(timdex_metadata):
     assert timdex_metadata.append_deltas_count == 0
 
 
+def test_tdm_append_deltas_count_for_missing_view(timdex_metadata_empty):
+    assert timdex_metadata_empty.append_deltas_count_for(TIMDEXRecords) == 0
+
+
 def test_tdm_records_equals_static_without_deltas(timdex_metadata):
     static_count = timdex_metadata.timdex_dataset.conn.query(
         """select count(*) from static_db.records;"""
@@ -455,6 +459,12 @@ def test_tdm_merge_append_deltas_deletes_append_deltas(
 
     assert timdex_metadata_merged_deltas.append_deltas_count == 0
     assert not os.listdir(records_deltas_path_after)
+
+
+def test_tdm_append_deltas_count_for_after_merge(timdex_metadata_with_deltas):
+    timdex_metadata_with_deltas.merge_append_deltas()
+
+    assert timdex_metadata_with_deltas.append_deltas_count_for(TIMDEXRecords) == 0
 
 
 def test_tdm_embeddings_metadata_view_structure(tmp_path):
