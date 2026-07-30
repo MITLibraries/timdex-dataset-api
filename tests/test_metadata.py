@@ -262,7 +262,6 @@ def test_tdm_append_deltas_view_empty_structure(timdex_metadata):
         "run_record_offset",
         "run_timestamp",
         "filename",
-        "append_delta_filename",
     }
     assert set(append_deltas_df.columns) == expected_columns
     assert len(append_deltas_df) == 0
@@ -288,6 +287,10 @@ def test_tdm_current_records_count_property(timdex_metadata):
 
 def test_tdm_append_deltas_count_property_empty(timdex_metadata):
     assert timdex_metadata.append_deltas_count == 0
+
+
+def test_tdm_append_deltas_count_for_missing_view(timdex_metadata_empty):
+    assert timdex_metadata_empty.append_deltas_count_for(TIMDEXRecords) == 0
 
 
 def test_tdm_records_equals_static_without_deltas(timdex_metadata):
@@ -321,6 +324,30 @@ def test_tdm_views_with_append_deltas(timdex_metadata_with_deltas):
 def test_tdm_append_deltas_view_has_data(timdex_metadata_with_deltas):
     append_deltas_count = timdex_metadata_with_deltas.append_deltas_count
     assert append_deltas_count > 0
+
+
+def test_tdm_filename_filter_matches_append_delta_rows(timdex_metadata_with_deltas):
+    conn = timdex_metadata_with_deltas.timdex_dataset.conn
+    filename = conn.execute(
+        "select filename from metadata.records_append_deltas limit 1"
+    ).fetchone()[0]
+
+    delta_count = conn.execute(
+        "select count(*) from metadata.records_append_deltas where filename = ?",
+        [filename],
+    ).fetchone()[0]
+    records_count = conn.execute(
+        "select count(*) from metadata.records where filename = ?", [filename]
+    ).fetchone()[0]
+    shadow_count = conn.execute("""
+        select count(*)
+        from metadata.records_append_deltas
+        where filename like '%append_delta%'
+        """).fetchone()[0]
+
+    assert delta_count > 0
+    assert records_count >= delta_count
+    assert shadow_count == 0
 
 
 def test_tdm_records_includes_deltas(timdex_metadata_with_deltas):
@@ -432,6 +459,12 @@ def test_tdm_merge_append_deltas_deletes_append_deltas(
 
     assert timdex_metadata_merged_deltas.append_deltas_count == 0
     assert not os.listdir(records_deltas_path_after)
+
+
+def test_tdm_append_deltas_count_for_after_merge(timdex_metadata_with_deltas):
+    timdex_metadata_with_deltas.merge_append_deltas()
+
+    assert timdex_metadata_with_deltas.append_deltas_count_for(TIMDEXRecords) == 0
 
 
 def test_tdm_embeddings_metadata_view_structure(tmp_path):
