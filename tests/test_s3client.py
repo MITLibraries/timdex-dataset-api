@@ -53,9 +53,15 @@ def test_list_objects(s3_bucket_mocked, tmp_path):
     s3_uri = "s3://timdex/metadata/append_deltas/test.txt"
     client.upload_file(test_file, s3_uri)
 
-    # Verify list of objects
+    # Upload a second file OUTSIDE the queried prefix, to prove prefix filtering
+    outside_file = tmp_path / "outside.txt"
+    outside_file.write_text("unrelated content")
+    client.upload_file(outside_file, "s3://timdex/other/prefix/outside.txt")
+
+    # Verify filtered list of objects: only keys under the prefix, none outside
     s3_prefix = "s3://timdex/metadata/append_deltas"
     assert client.list_objects(s3_prefix) == ["metadata/append_deltas/test.txt"]
+    assert "other/prefix/outside.txt" not in client.list_objects(s3_prefix)
 
 
 def test_upload_download_file(s3_bucket_mocked, tmp_path):

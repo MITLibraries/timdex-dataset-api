@@ -71,8 +71,11 @@ class S3Client:
             raise AWSCredentialsError from e
 
     def list_objects(self, s3_prefix: str) -> list[str]:
-        bucket, _ = self._split_s3_uri(s3_prefix)
-        objects = [obj.key for obj in self.resource.Bucket(bucket).objects.all()]
+        """List object keys under the prefix, not the whole bucket."""
+        bucket, prefix = self._split_s3_uri(s3_prefix)
+        objects = [
+            obj.key for obj in self.resource.Bucket(bucket).objects.filter(Prefix=prefix)
+        ]
         logger.debug(f"Found {len(objects)} objects in {s3_prefix}: {objects}")
         return objects
 
