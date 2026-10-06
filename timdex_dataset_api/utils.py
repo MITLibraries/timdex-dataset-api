@@ -204,7 +204,7 @@ class DuckDBConnectionFactory:
                     create or replace secret aws_s3_secret (
                         type s3,
                         provider credential_chain,
-                        refresh true
+                        refresh auto
                     );
                     """)
             except duckdb.Error as e:
