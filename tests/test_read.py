@@ -1,5 +1,6 @@
-# ruff: noqa: D205, D209, PLR2004
+# ruff: noqa: D205, D209, PLR2004, SLF001
 import re
+from unittest.mock import MagicMock
 
 import pandas as pd
 import pyarrow as pa
@@ -9,6 +10,19 @@ from duckdb import ParserException
 from timdex_dataset_api.data_types import TIMDEXRecords
 
 DATASET_COLUMNS_SET = set(TIMDEXRecords.AVAILABLE_READ_COLUMNS)
+
+
+def test_iter_data_chunks_does_not_override_duckdb_thread_limit():
+    dataset = MagicMock()
+    dataset.location_scheme = "s3"
+    dataset.config.read_batch_size = 1_000
+    cursor = dataset.conn.execute.return_value
+    cursor.to_arrow_reader.return_value = iter(["batch"])
+
+    records = TIMDEXRecords(dataset)
+
+    assert list(records._iter_data_chunks("select * from records")) == ["batch"]
+    dataset.conn.execute.assert_called_once_with("select * from records")
 
 
 def _count_rows_via_duckdb_parquet(timdex_dataset) -> int:

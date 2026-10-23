@@ -475,18 +475,10 @@ class TIMDEXDataType(ABC):
 
     def _iter_data_chunks(self, data_query: str) -> Iterator[pa.RecordBatch]:
         """Execute data query and stream ``pyarrow.RecordBatch`` results."""
-        if self.timdex_dataset.location_scheme == "s3":
-            self.timdex_dataset.conn.execute("""set threads=16;""")
-        try:
-            cursor = self.timdex_dataset.conn.execute(data_query)
-            yield from cursor.to_arrow_reader(
-                batch_size=self.timdex_dataset.config.read_batch_size
-            )
-        finally:
-            if self.timdex_dataset.location_scheme == "s3":
-                self.timdex_dataset.conn.execute(
-                    f"""set threads={self.timdex_dataset.conn_factory.threads};"""
-                )
+        cursor = self.timdex_dataset.conn.execute(data_query)
+        yield from cursor.to_arrow_reader(
+            batch_size=self.timdex_dataset.config.read_batch_size
+        )
 
     def read_dataframes_iter(
         self,
