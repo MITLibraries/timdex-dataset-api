@@ -18,7 +18,7 @@ def _count_rows_via_duckdb_parquet(timdex_dataset) -> int:
             '{timdex_dataset.records.data_root}/**/*.parquet',
             hive_partitioning=true
         )
-    """).fetchone()[0]
+    """).fetchall()[0][0]
 
 
 def test_read_batches_yields_pyarrow_record_batches(timdex_dataset_multi_source):

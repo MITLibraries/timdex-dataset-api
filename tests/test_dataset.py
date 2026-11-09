@@ -164,7 +164,7 @@ def test_dataset_duckdb_context_does_not_create_data_schema(timdex_dataset):
             from information_schema.schemata
             where catalog_name = 'memory'
             and schema_name = 'data';
-            """).fetchone()[0]
+            """).fetchall()[0][0]
         == 0
     )
 

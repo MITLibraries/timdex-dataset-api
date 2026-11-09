@@ -117,14 +117,14 @@ class TIMDEXDatasetMetadata:
         """Count of all records in dataset."""
         return self.timdex_dataset.conn.query("""
             select count(*) from metadata.records;
-            """).fetchone()[0]  # type: ignore[index]
+            """).fetchall()[0][0]
 
     @property
     def current_records_count(self) -> int:
         """Count of all current records in dataset."""
         return self.timdex_dataset.conn.query("""
             select count(*) from metadata.current_records;
-            """).fetchone()[0]  # type: ignore[index]
+            """).fetchall()[0][0]
 
     def append_deltas_count_for(self, data_type_class: type["TIMDEXDataType"]) -> int:
         """Count append deltas rows for a single data type."""
@@ -132,7 +132,7 @@ class TIMDEXDatasetMetadata:
         try:
             return self.timdex_dataset.conn.query(f"""
                 select count(*) from metadata.{view_name};
-            """).fetchone()[0]  # type: ignore[index]
+            """).fetchall()[0][0]
         except (DuckDBCatalogException, DuckDBIOException):
             return 0
 
@@ -253,7 +253,7 @@ class TIMDEXDatasetMetadata:
 
         row_count = conn.query(
             f"select count(*) from {data_type_class.NAME};"
-        ).fetchone()[0]  # type: ignore[index]
+        ).fetchall()[0][0]
         logger.info(
             f"'{data_type_class.NAME}' table created - rows: {row_count}, "
             f"elapsed: {time.perf_counter() - start_time}"
@@ -360,7 +360,7 @@ class TIMDEXDatasetMetadata:
             select count(*) from information_schema.tables
             where table_catalog = 'static_db'
             and table_name = '{data_type_class.NAME}'
-        """).fetchone()[0]  # type: ignore[index]
+        """).fetchall()[0][0]
 
         if table_exists:
             conn.execute(f"""
@@ -411,14 +411,14 @@ class TIMDEXDatasetMetadata:
             select count(*) from information_schema.tables
             where table_catalog = 'static_db'
             and table_name = '{data_type_class.NAME}'
-        """).fetchone()[0]  # type: ignore[index]
+        """).fetchall()[0][0]
 
         deltas_view_exists = conn.execute(f"""
             select count(*) from information_schema.tables
             where table_schema = 'metadata'
             and table_name = '{data_type_class.NAME}_append_deltas'
             and table_type = 'VIEW'
-        """).fetchone()[0]  # type: ignore[index]
+        """).fetchall()[0][0]
 
         # build the base union (or single-input) subquery
         base_subquery = self._build_base_union_sql(
@@ -543,7 +543,7 @@ class TIMDEXDatasetMetadata:
                 conn.execute(f"""
                     select count(*) as file_count
                     from glob('{deltas_glob}')
-                """).fetchone()[0],  # type: ignore[index]
+                """).fetchall()[0][0],
             )
         except (DuckDBHTTPException, DuckDBIOException):
             logger.debug(
@@ -558,7 +558,7 @@ class TIMDEXDatasetMetadata:
             select count(*) from information_schema.tables
             where table_schema = 'metadata'
             and table_name = '{table_name}'
-        """).fetchone()[0]  # type: ignore[index]
+        """).fetchall()[0][0]
         return bool(table_exists)
 
     def merge_append_deltas(self) -> None:
@@ -656,7 +656,7 @@ class TIMDEXDatasetMetadata:
             select count(*) from information_schema.tables
             where table_catalog = 'local_static_db'
             and table_name = '{data_type_class.NAME}'
-        """).fetchone()[0]  # type: ignore[index]
+        """).fetchall()[0][0]
 
         if not table_exists:
             self.timdex_dataset.conn.execute(f"""

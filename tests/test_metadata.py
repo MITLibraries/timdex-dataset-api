@@ -119,7 +119,7 @@ def test_tdm_duckdb_context_creates_metadata_schema(timdex_metadata):
             from information_schema.schemata
             where catalog_name = 'memory'
             and schema_name = 'metadata';
-            """).fetchone()[0]
+            """).fetchall()[0][0]
         == 1
     )
 
@@ -272,7 +272,7 @@ def test_tdm_records_count_property(timdex_metadata):
 
     manual_count = timdex_metadata.timdex_dataset.conn.query(
         """select count(*) from metadata.records;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     assert timdex_metadata.records_count == manual_count
 
 
@@ -281,7 +281,7 @@ def test_tdm_current_records_count_property(timdex_metadata):
 
     manual_count = timdex_metadata.timdex_dataset.conn.query(
         """select count(*) from metadata.current_records;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     assert timdex_metadata.current_records_count == manual_count
 
 
@@ -296,10 +296,10 @@ def test_tdm_append_deltas_count_for_missing_view(timdex_metadata_empty):
 def test_tdm_records_equals_static_without_deltas(timdex_metadata):
     static_count = timdex_metadata.timdex_dataset.conn.query(
         """select count(*) from static_db.records;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     records_count = timdex_metadata.timdex_dataset.conn.query(
         """select count(*) from metadata.records;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     assert static_count == records_count
 
 
@@ -330,20 +330,20 @@ def test_tdm_filename_filter_matches_append_delta_rows(timdex_metadata_with_delt
     conn = timdex_metadata_with_deltas.timdex_dataset.conn
     filename = conn.execute(
         "select filename from metadata.records_append_deltas limit 1"
-    ).fetchone()[0]
+    ).fetchall()[0][0]
 
     delta_count = conn.execute(
         "select count(*) from metadata.records_append_deltas where filename = ?",
         [filename],
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     records_count = conn.execute(
         "select count(*) from metadata.records where filename = ?", [filename]
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     shadow_count = conn.execute("""
         select count(*)
         from metadata.records_append_deltas
         where filename like '%append_delta%'
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
     assert delta_count > 0
     assert records_count >= delta_count
@@ -353,7 +353,7 @@ def test_tdm_filename_filter_matches_append_delta_rows(timdex_metadata_with_delt
 def test_tdm_records_includes_deltas(timdex_metadata_with_deltas):
     static_count = timdex_metadata_with_deltas.timdex_dataset.conn.query(
         """select count(*) from static_db.records;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     deltas_count = timdex_metadata_with_deltas.append_deltas_count
     records_count = timdex_metadata_with_deltas.records_count
 
@@ -419,7 +419,7 @@ def test_tdm_merge_append_deltas_static_counts_match_records_count_before_merge(
 ):
     static_count_merged_deltas = timdex_metadata_merged_deltas.timdex_dataset.conn.query(
         """select count(*) as count from static_db.records;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     assert static_count_merged_deltas == timdex_metadata_with_deltas.records_count
 
 
@@ -678,25 +678,25 @@ def test_tdm_prejoined_embeddings_view_has_correct_source_values(tmp_path):
     alma_embeddings = td.conn.query("""
         select count(*) from metadata.embeddings
         where run_id = 'prejoin-run-1' and source = 'alma'
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     assert alma_embeddings == 10  # noqa: PLR2004
 
     # all embeddings from run-2 should have source='dspace'
     dspace_embeddings = td.conn.query("""
         select count(*) from metadata.embeddings
         where run_id = 'prejoin-run-2' and source = 'dspace'
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     assert dspace_embeddings == 10  # noqa: PLR2004
 
     # verify current_embeddings also has pre-joined source column
     alma_current = td.conn.query("""
         select count(*) from metadata.current_embeddings
         where source = 'alma'
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     dspace_current = td.conn.query("""
         select count(*) from metadata.current_embeddings
         where source = 'dspace'
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     assert alma_current == 10  # noqa: PLR2004
     assert dspace_current == 10  # noqa: PLR2004
 
@@ -741,13 +741,13 @@ def test_tdm_prejoined_embeddings_filterable_by_run_date(tmp_path):
     march_embeddings = td.conn.query("""
         select count(*) from metadata.embeddings
         where run_date = cast('2025-03-01' as date)
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     assert march_embeddings == 10  # noqa: PLR2004
 
     april_embeddings = td.conn.query("""
         select count(*) from metadata.embeddings
         where run_date = cast('2025-04-01' as date)
-    """).fetchone()[0]
+    """).fetchall()[0][0]
     assert april_embeddings == 10  # noqa: PLR2004
 
 
@@ -850,10 +850,10 @@ def test_tdm_embeddings_write_append_deltas_without_static_embeddings_table(tmp_
     # embeddings metadata views should still exist and include append deltas
     embeddings_count = td.conn.query(
         """select count(*) from metadata.embeddings;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     embeddings_deltas_count = td.conn.query(
         """select count(*) from metadata.embeddings_append_deltas;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
 
     embeddings_deltas_path = td.metadata.append_deltas_path_for(TIMDEXEmbeddings)
     assert embeddings_count == record_count
@@ -902,11 +902,11 @@ def test_tdm_merge_append_deltas_merges_embeddings(tmp_path):
 
     embeddings_count_before_merge = td.conn.query(
         """select count(*) from metadata.embeddings;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     assert (
         td.conn.query(
             """select count(*) from metadata.embeddings_append_deltas;"""
-        ).fetchone()[0]
+        ).fetchall()[0][0]
         == run_2_count
     )
 
@@ -915,10 +915,10 @@ def test_tdm_merge_append_deltas_merges_embeddings(tmp_path):
 
     embeddings_static_after_merge = td.conn.query(
         """select count(*) from static_db.embeddings;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
     embeddings_deltas_after_merge = td.conn.query(
         """select count(*) from metadata.embeddings_append_deltas;"""
-    ).fetchone()[0]
+    ).fetchall()[0][0]
 
     assert embeddings_static_after_merge == embeddings_count_before_merge
     assert embeddings_deltas_after_merge == 0
@@ -1011,7 +1011,7 @@ def test_tdm_preload_false_no_temp_table(timdex_dataset_with_runs):
         and table_name = 'current_records'
         and table_type = 'LOCAL TEMPORARY'
         ;
-        """).fetchone()[0]
+        """).fetchall()[0][0]
 
     assert temp_table_count == 0
 
@@ -1028,6 +1028,6 @@ def test_tdm_preload_true_has_temp_table(timdex_dataset_with_runs):
             and table_name = 'current_records'
             and table_type = 'LOCAL TEMPORARY'
             ;
-            """).fetchone()[0]
+            """).fetchall()[0][0]
 
     assert temp_table_count == 1
