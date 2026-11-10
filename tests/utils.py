@@ -1,6 +1,6 @@
 """tests/utils.py"""
 
-# ruff: noqa: S311
+# ruff: noqa: PLR0917, S311
 
 import json
 import random

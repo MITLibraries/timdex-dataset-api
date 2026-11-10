@@ -478,8 +478,7 @@ class TIMDEXDataType(ABC):
         if self.timdex_dataset.location_scheme == "s3":
             self.timdex_dataset.conn.execute("""set threads=16;""")
         try:
-            cursor = self.timdex_dataset.conn.execute(data_query)
-            yield from cursor.to_arrow_reader(
+            yield from self.timdex_dataset.conn.sql(data_query).to_arrow_reader(
                 batch_size=self.timdex_dataset.config.read_batch_size
             )
         finally:

@@ -19,7 +19,7 @@ def _count_rows_via_duckdb_parquet(timdex_dataset) -> int:
             '{timdex_dataset.records.data_root}/**/*.parquet',
             hive_partitioning=true
         )
-    """).fetchone()[0]
+    """).fetchall()[0][0]
 
 
 def _count_parquet_files(timdex_dataset) -> int:
